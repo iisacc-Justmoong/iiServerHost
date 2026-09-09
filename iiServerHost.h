@@ -1,17 +1,14 @@
 #pragma once
 
 #include <QtCore/QString>
-#include <QtCore/qglobal.h>
-
-#if defined(IISERVERHOST_BUILDING_LIBRARY)
-#  define IISERVERHOST_EXPORT Q_DECL_EXPORT
-#else
-#  define IISERVERHOST_EXPORT Q_DECL_IMPORT
-#endif
+#include "iiServerHostExport.h"
 
 namespace iiServerHost {
 
-/// Returns the placeholder greeting; no domain functionality is implemented.
+/// Compatibility greeting for existing consumers.
 [[nodiscard]] IISERVERHOST_EXPORT QString helloWorld();
 
 } // namespace iiServerHost
+
+#include "ServerHost.h"
+#include "PairingLink.h"

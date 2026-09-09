@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(iiServerHost VERSION 0.1.0 LANGUAGES CXX)
+project(iiServerHost VERSION 0.3.0 LANGUAGES CXX)
 
 if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     if(DEFINED ENV{HOME})
@@ -12,16 +12,22 @@ if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${_user_home}/.local/SDK/iiServerHost" CACHE PATH "Install prefix" FORCE)
 endif()
 
-find_package(Qt6 6.8.3 EXACT REQUIRED COMPONENTS Core)
+find_package(Qt6 6.8.3 EXACT REQUIRED COMPONENTS Core Network WebSockets)
+set(CMAKE_AUTOMOC ON)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
 
-add_library(iiServerHost SHARED iiServerHost.h iiServerHost.cpp)
+option(BUILD_SHARED_LIBS "Build a shared SDK (disable for iOS)" ON)
+add_library(iiServerHost iiServerHost.h iiServerHost.cpp ServerHost.h iiServerHostExport.h
+    Protocol.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h)
 add_library(iiServerHost::iiServerHost ALIAS iiServerHost)
 target_compile_features(iiServerHost PUBLIC cxx_std_20)
 target_compile_definitions(iiServerHost PRIVATE IISERVERHOST_BUILDING_LIBRARY)
-target_link_libraries(iiServerHost PUBLIC Qt6::Core)
+if(NOT BUILD_SHARED_LIBS)
+    target_compile_definitions(iiServerHost PUBLIC IISERVERHOST_STATIC)
+endif()
+target_link_libraries(iiServerHost PUBLIC Qt6::Core Qt6::Network Qt6::WebSockets)
 target_include_directories(iiServerHost PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -36,10 +42,44 @@ set_target_properties(iiServerHost PROPERTIES
 )
 
 if(BUILD_TESTING)
+    include(cmake/TestCertificate.cmake)
+    find_package(Qt6 6.8.3 EXACT REQUIRED COMPONENTS Test)
+    add_executable(iiServerHostTests tests/hosting.cpp)
+    target_link_libraries(iiServerHostTests PRIVATE iiServerHost::iiServerHost Qt6::Test)
+    target_compile_definitions(iiServerHostTests PRIVATE TEST_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME iiServerHost.hosting COMMAND iiServerHostTests)
+    add_executable(iiServerHostPairingTests tests/pairing.cpp)
+    target_link_libraries(iiServerHostPairingTests PRIVATE iiServerHost::iiServerHost Qt6::Test)
+    add_test(NAME iiServerHost.pairing COMMAND iiServerHostPairingTests)
+    set_tests_properties(iiServerHost.pairing PROPERTIES TIMEOUT 45)
+    set_tests_properties(iiServerHost.hosting PROPERTIES TIMEOUT 60)
     add_executable(iiServerHostHelloWorld tests/hello_world.cpp)
     target_link_libraries(iiServerHostHelloWorld PRIVATE iiServerHost::iiServerHost)
     set_target_properties(iiServerHostHelloWorld PROPERTIES CXX_EXTENSIONS OFF)
     add_test(NAME iiServerHost.hello_world COMMAND iiServerHostHelloWorld)
+endif()
+
+if(NOT IOS AND NOT ANDROID)
+    add_executable(ii-server-relay tools/relay.cpp)
+    target_link_libraries(ii-server-relay PRIVATE iiServerHost::iiServerHost)
+    add_executable(ii-server-host tools/host.cpp)
+    target_link_libraries(ii-server-host PRIVATE iiServerHost::iiServerHost)
+    set_target_properties(ii-server-host PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+    if(APPLE)
+        set_target_properties(ii-server-host ii-server-relay PROPERTIES INSTALL_RPATH "@loader_path/../${CMAKE_INSTALL_LIBDIR}")
+    elseif(UNIX)
+        set_target_properties(ii-server-host ii-server-relay PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    install(TARGETS ii-server-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set_target_properties(ii-server-relay PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+    install(TARGETS ii-server-relay RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(BUILD_TESTING)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_test(NAME iiServerHost.process_hosting COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_hosting.py" "$<TARGET_FILE:ii-server-relay>"
+            "$<TARGET_FILE:ii-server-host>" "${CMAKE_CURRENT_BINARY_DIR}")
+        set_tests_properties(iiServerHost.process_hosting PROPERTIES TIMEOUT 45)
+    endif()
 endif()
 
 install(TARGETS iiServerHost EXPORT iiServerHostTargets
@@ -47,7 +87,7 @@ install(TARGETS iiServerHost EXPORT iiServerHostTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES iiServerHost.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES iiServerHost.h ServerHost.h PairingLink.h iiServerHostExport.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
 install(EXPORT iiServerHostTargets
     FILE iiServerHostTargets.cmake
