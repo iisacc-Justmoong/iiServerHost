@@ -23,6 +23,11 @@ public:
     bool startHost(QString hostId, QString name, RequestHandler handler,
                    QStringList addresses = {}, QHostAddress bindAddress = QHostAddress::AnyIPv4);
     QString createOffer(int lifetimeSeconds = 60);
+    // Discovery offers bind a candidate and require a human comparison of the
+    // TLS-bound code before the host exposes any Files metadata or bytes.
+    QString createDeviceOffer(const QString &peerId, int lifetimeSeconds = 60);
+    QString verificationCode() const;
+    bool confirmDevice();
     bool join(const QString &qr, QString peerId, QString name);
     void cancelPairing();
     void stop();
@@ -34,6 +39,7 @@ public:
     QString peerName() const;
     int secondsRemaining() const;
     QJsonArray peers() const;
+    QStringList pairedDeviceIds() const;
     QString request(const QString &host, const QJsonObject &payload);
 signals:
     void changed();

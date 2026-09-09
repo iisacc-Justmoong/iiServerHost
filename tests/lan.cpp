@@ -8,6 +8,36 @@ using namespace iiServerHost;
 class LanTests : public QObject {
     Q_OBJECT
 private slots:
+    void discoveredDeviceNeedsConfirmationBeforeFiles() {
+        LanPeer host, client, wrong;
+        int reads = 0;
+        QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
+            ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        const auto offer = host.createDeviceOffer("phone"); QVERIFY(!offer.isEmpty());
+        QVERIFY(wrong.join(offer, "other", "Other")); QTRY_COMPARE(wrong.phase(), "error");
+        QCOMPARE(reads, 0);
+        QVERIFY(client.join(offer, "phone", "Phone"));
+        QTRY_COMPARE(host.phase(), "confirming"); QTRY_COMPARE(client.phase(), "confirming");
+        QVERIFY(!client.connected()); QCOMPARE(reads, 0);
+        QCOMPARE(host.verificationCode(), client.verificationCode());
+        QCOMPARE(host.verificationCode().size(), 14);
+        QVERIFY(host.confirmDevice()); QTRY_VERIFY(client.connected());
+        QCOMPARE(host.pairedDeviceIds(), QStringList{"phone"});
+        QCOMPARE(client.pairedDeviceIds(), QStringList{"desktop"});
+        QCOMPARE(reads, 1); QVERIFY(!host.confirmDevice());
+        QVERIFY(host.createDeviceOffer("desktop").isEmpty());
+    }
+    void discoveredDeviceCancellationClosesPendingConnection() {
+        LanPeer host, client;
+        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) {
+            return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(client.join(host.createDeviceOffer("phone"), "phone", "Phone"));
+        QTRY_COMPARE(host.phase(), "confirming"); host.cancelPairing();
+        QTRY_COMPARE(client.phase(), "error"); QVERIFY(!client.connected());
+        QVERIFY(host.verificationCode().isEmpty());
+    }
     void strictLocalQr() {
         LanLink link{{"192.168.10.20", "10.0.0.8"}, 9443, "desktop", "Desktop", QString(64, 'a'), QString(64, 'b'), QDateTime::currentDateTimeUtc().addSecs(60)}, decoded;
         QVERIFY(LanLink::decode(link.encode(), &decoded));

@@ -32,6 +32,10 @@ QString randomCode() {
     for (qsizetype i = 0; i < bytes.size(); i += 4) { const auto value = QRandomGenerator::system()->generate(); memcpy(bytes.data() + i, &value, 4); }
     return QString::fromLatin1(bytes.toHex());
 }
+QString verification(const LanLink &link, const QString &peerId, const QString &nonce) {
+    const auto digest = QCryptographicHash::hash((link.fingerprint + ':' + link.code + ':' + peerId + ':' + nonce).toUtf8(), QCryptographicHash::Sha256).toHex().left(12).toUpper();
+    return QString::fromLatin1(digest.mid(0, 4) + '-' + digest.mid(4, 4) + '-' + digest.mid(8, 4));
+}
 bool sameCode(const QString &a, const QString &b) {
     const auto first = a.toLatin1(), second = b.toLatin1();
     if (first.size() != 64 || second.size() != 64) return false;
@@ -93,7 +97,7 @@ bool LanLink::decode(const QString &text, LanLink *result) {
 
 class LanPeer::Private {
 public:
-    struct Session { QString id, name; bool paired = false; QDateTime deadline; };
+    struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; };
     LanPeer *q;
     std::unique_ptr<QWebSocketServer> server;
     QPointer<QWebSocket> client;
@@ -102,6 +106,7 @@ public:
     RequestHandler handler;
     LanLink offer, joining;
     QString phase = "idle", error, qr, peerName, clientId, clientName, connectionError;
+    QString expectedPeer, verificationCode, clientNonce;
     QTimer timer;
     QDateTime deadline, connectDeadline;
     int addressIndex = 0;
@@ -140,7 +145,8 @@ public:
         QObject::connect(socket, &QWebSocket::connected, q, [this, socket] {
             if (!pinned(socket)) { fail("The desktop certificate does not match the QR code."); return; }
             helloSent = true; phase = "verifying";
-            send(socket, {{"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}});
+            clientNonce = randomCode(); verificationCode = verification(joining, clientId, clientNonce);
+            send(socket, {{"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}});
             joining.code.clear(); emit q->changed();
         });
         QObject::connect(socket, &QWebSocket::textMessageReceived, q, [this](const QString &text) { clientMessage(parse(text)); });
@@ -155,7 +161,11 @@ public:
     void clientMessage(const QJsonObject &m) {
         const auto type = m.value("type").toString();
         if (type == "error") { fail(m.value("error").toString("Pairing failed. Scan a new QR code.")); return; }
-        if (type == "ready" && phase == "verifying" && m.value("host").toString() == joining.hostId) {
+        if (type == "verify" && phase == "verifying" && m.value("host").toString() == joining.hostId) {
+            phase = "confirming"; deadline = QDateTime::currentDateTimeUtc().addSecs(60); emit q->changed(); return;
+        }
+        if (type == "ready" && (phase == "verifying" || phase == "confirming") && m.value("host").toString() == joining.hostId) {
+            phase = "verifying";
             const auto result = m.value("files").toObject();
             if (!result.value("ok").toBool() || !result.value("entries").isArray()) { fail("The desktop could not open its Files. Pairing was not completed."); return; }
             send(client, {{"type", "confirm"}}); return;
@@ -177,19 +187,25 @@ public:
         if (type == "pair" && session.id.isEmpty()) {
             const auto id = m.value("peerId").toString(), name = m.value("name").toString();
             if (qr.isEmpty() || offer.expiresAt <= QDateTime::currentDateTimeUtc() || m.value("host").toString() != offer.hostId
-                || !sameCode(m.value("code").toString(), offer.code) || !identifier(id) || id == offer.hostId || name.isEmpty() || name.size() > 128) {
+                || !sameCode(m.value("code").toString(), offer.code) || !identifier(id) || id == offer.hostId || name.isEmpty() || name.size() > 128
+                || (!expectedPeer.isEmpty() && (expectedPeer != id || !hexToken(m.value("nonce").toString())))) {
                 reject("This QR code is expired, cancelled, or already used. Show a new QR code."); return;
             }
             for (const auto &other : std::as_const(clients)) if (other.id == id) { reject("This device is already connected."); return; }
             // Consume before opening Files or reporting success. No iisacc cookie is involved.
-            offer.code.clear(); qr.clear(); session.id = id; session.name = name; session.deadline = QDateTime::currentDateTimeUtc().addSecs(15);
+            verificationCode = expectedPeer.isEmpty() ? QString() : verification(offer, id, m.value("nonce").toString());
+            offer.code.clear(); qr.clear(); session.id = id; session.name = name; session.deadline = QDateTime::currentDateTimeUtc().addSecs(expectedPeer.isEmpty() ? 15 : 60);
+            if (!expectedPeer.isEmpty()) {
+                session.awaitingApproval = true; phase = "confirming"; peerName = name;
+                send(socket, {{"type", "verify"}, {"host", offer.hostId}}); emit q->changed(); return;
+            }
             phase = "verifying"; peerName = name;
             QJsonObject files;
             try { files = handler(id, {{"op", "list"}, {"path", ""}}); } catch (...) { files = protocol::error("host_error"); }
             if (!files.value("ok").toBool() || !files.value("entries").isArray()) { error = "The desktop could not open its Files."; phase = "error"; reject(error); emit q->changed(); return; }
             send(socket, {{"type", "ready"}, {"host", offer.hostId}, {"files", files}}); emit q->changed(); return;
         }
-        if (type == "confirm" && !session.id.isEmpty() && !session.paired && session.deadline > QDateTime::currentDateTimeUtc()) {
+        if (type == "confirm" && !session.id.isEmpty() && !session.paired && !session.awaitingApproval && session.deadline > QDateTime::currentDateTimeUtc()) {
             session.paired = true; phase = "paired";
             send(socket, {{"type", "paired"}, {"host", offer.hostId}, {"name", offer.name}});
             emit q->changed(); emit q->paired(session.id); return;
@@ -263,7 +279,7 @@ bool LanPeer::join(const QString &qr, QString peerId, QString name) {
     d->openAddress(); emit changed(); return true;
 }
 void LanPeer::cancelPairing() {
-    d->qr.clear(); d->offer.code.clear();
+    d->qr.clear(); d->offer.code.clear(); d->expectedPeer.clear(); d->verificationCode.clear();
     for (auto *socket : d->clients.keys()) if (!d->clients.value(socket).paired) { socket->disconnect(this); d->clients.remove(socket); socket->abort(); socket->deleteLater(); }
     if (d->client && !d->clientPaired) { auto *socket = d->client.data(); d->client = nullptr; socket->disconnect(this); socket->abort(); socket->deleteLater(); }
     d->phase = hosting() ? "hosting" : d->clientPaired ? "paired" : "idle"; d->error.clear(); emit changed();
@@ -273,11 +289,36 @@ void LanPeer::stop() {
     if (d->client) { auto *socket = d->client.data(); d->client = nullptr; socket->disconnect(this); socket->abort(); socket->deleteLater(); }
     for (auto *socket : d->clients.keys()) { socket->disconnect(this); socket->abort(); socket->deleteLater(); }
     d->clients.clear(); d->clientPaired = false; d->handler = {}; d->offer = {}; d->joining = {}; d->qr.clear(); d->error.clear(); d->peerName.clear();
+    d->expectedPeer.clear(); d->verificationCode.clear(); d->clientNonce.clear();
     d->phase = "idle"; d->connectionError.clear(); const auto requests = d->requests.keys(); d->requests.clear();
     for (const auto &id : requests) emit completed(id, protocol::error("stopped"), "local");
     d->stopping = false; emit changed();
 }
 bool LanPeer::hosting() const { return bool(d->server); }
+QString LanPeer::createDeviceOffer(const QString &peerId, int lifetimeSeconds) {
+    if (!identifier(peerId) || peerId == d->offer.hostId) return {};
+    const auto link = createOffer(lifetimeSeconds);
+    if (!link.isEmpty()) d->expectedPeer = peerId;
+    return link;
+}
+QString LanPeer::verificationCode() const { return d->phase == "confirming" ? d->verificationCode : QString(); }
+bool LanPeer::confirmDevice() {
+    if (d->phase != "confirming") return false;
+    for (auto *socket : d->clients.keys()) {
+        auto &session = d->clients[socket];
+        if (!session.awaitingApproval || session.deadline <= QDateTime::currentDateTimeUtc()) continue;
+        session.awaitingApproval = false; session.deadline = QDateTime::currentDateTimeUtc().addSecs(15);
+        QJsonObject files;
+        try { files = d->handler(session.id, {{"op", "list"}, {"path", ""}}); } catch (...) { files = protocol::error("host_error"); }
+        if (!files.value("ok").toBool() || !files.value("entries").isArray()) {
+            d->error = "The desktop could not open its Files."; d->phase = "error";
+            send(socket, {{"type", "error"}, {"error", d->error}}); socket->close(); emit changed(); return false;
+        }
+        d->phase = "verifying";
+        send(socket, {{"type", "ready"}, {"host", d->offer.hostId}, {"files", files}}); emit changed(); return true;
+    }
+    return false;
+}
 bool LanPeer::connected() const { return d->clientPaired; }
 QString LanPeer::phase() const { return d->phase; }
 QString LanPeer::errorString() const { return d->error; }
@@ -287,6 +328,12 @@ int LanPeer::secondsRemaining() const { return d->qr.isEmpty() ? 0 : qMax(0, int
 QJsonArray LanPeer::peers() const {
     QJsonArray result;
     if (d->clientPaired) result.append(QJsonObject{{"peerId", d->joining.hostId}, {"name", d->peerName}});
+    return result;
+}
+QStringList LanPeer::pairedDeviceIds() const {
+    QStringList result;
+    if (d->clientPaired) result.append(d->joining.hostId);
+    for (const auto &session : d->clients) if (session.paired) result.append(session.id);
     return result;
 }
 QString LanPeer::request(const QString &host, const QJsonObject &payload) {
