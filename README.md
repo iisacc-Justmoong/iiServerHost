@@ -1,5 +1,18 @@
 # iiServerHost
 
+## 0.4.0: 직접 LAN 페어링
+
+`LanPeer`는 외부 중계·계정 서버 없이 데스크탑과 모바일을 직접 연결한다. 데스크탑의 `startHost()`와 `createOffer()`가 사설 IPv4 주소·TLS 인증서 SHA-256·256비트 일회용 키·60초 만료를 담은 `LanLink` 버전 2 QR을 생성한다. 모바일은 `join(qr, deviceId, name)`으로 접속한다. QR 인증서 지문 확인 이전에는 응용 데이터를 전송하지 않으며, 로그인 쿠키나 계정 모델을 받지 않는다. QR 스캔 자체가 호스트의 접근 승인이다.
+
+Files 목록 확인과 클라이언트 confirm을 완료한 뒤 양쪽에 `paired`를 보내고 `request()`를 허용한다. 취소·만료·재사용·다른 지문은 거부한다. 연결 키는 메모리에만 보관하며 접속 중단 후에는 새 QR로 재연결한다. 이미 완료된 연결은 `cancelPairing()`으로 종료하지 않는다. `stop()`은 리스너·연결·미완료 요청을 모두 닫는다. SDK의 기존 RelayServer/Peer 및 버전 1 PairingLink는 네이티브 소비자 호환 API로 유지된다.
+
+호스트는 데스크탑에서만 빌드한다. iOS/Android는 `startHost()`를 거부하고 클라이언트만 포함한다. Qt 6.8.3 Core/Network/WebSockets를 재사용하며 데스크탑은 OpenSSL 3 Crypto로 RSA-2048 임시 인증서를 생성한다. OpenSSL은 Apache 2.0이며 `ThirdParty/OpenSSL-LICENSE.txt`와 설치의 `share/iiServerHost/licenses/`에 고지를 제공한다. Qt Secure Transport의 호스팅 호환성을 확인한 RSA 키 형식을 사용한다. 개인 키를 파일이나 키체인에 장기 저장하지 않는다. [OpenSSL keygen](https://docs.openssl.org/3.5/man3/EVP_PKEY_keygen/), [X509_sign](https://docs.openssl.org/3.5/man3/X509_sign/), [QWebSocket TLS](https://doc.qt.io/qt-6.8/qwebsocket.html)를 따른다.
+
+QR 주소는 RFC 1918 IPv4와 명시적인 테스트 loopback만 허용한다. 자동 검색은 Wi-Fi/Ethernet을 우선하고 공인 주소·DNS·link-local metadata·VPN point-to-point 인터페이스를 제외한다. 최대 8개 주소를 순서대로 시도하며 인터넷 fallback은 없다. IPv6 전용 LAN은 지원하지 않는다. 호스트는 TLS와 1 MiB 메시지/4 MiB 송신 대기열, 8개 연결 제한을 적용하며 클라이언트는 동시 요청을 32개로 제한한다.
+
+`iiServerHost.lan`은 로그인이나 SessionAuthenticator를 호출하지 않고 실제 TLS 페어링·파일 바이트·만료·취소·재사용·지문 불일치를 검증한다. 설치 소비자에도 같은 검사를 적용한다.
+
+
 C++20 / Qt 6.8.3 기반의 로컬·원격 앱 호스팅 SDK, 버전 0.3.0이다. 소비 앱은 `Peer` 하나로 자신의 파일을 제공하면서 같은 계정의 다른 호스트에 접근한다. 가까운 기기는 로컬 TLS 연결을 먼저 사용하고, 해당 주소에 연결할 수 없으면 원격 WebSocket 중계로 전환한다. 양쪽 기기가 중계에 외향 연결하므로 공유기의 포트 포워딩은 필요하지 않다.
 
 ## 구성과 신뢰 경계

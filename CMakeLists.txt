@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(iiServerHost VERSION 0.3.0 LANGUAGES CXX)
+project(iiServerHost VERSION 0.4.0 LANGUAGES CXX)
 
 if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     if(DEFINED ENV{HOME})
@@ -20,7 +20,14 @@ include(CTest)
 
 option(BUILD_SHARED_LIBS "Build a shared SDK (disable for iOS)" ON)
 add_library(iiServerHost iiServerHost.h iiServerHost.cpp ServerHost.h iiServerHostExport.h
-    Protocol.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h)
+    Protocol.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h LanPeer.cpp LanPeer.h)
+if(NOT IOS AND NOT ANDROID)
+    set(IISERVERHOST_NEEDS_CRYPTO TRUE)
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+    target_sources(iiServerHost PRIVATE LanIdentity.cpp LanIdentity.h)
+    target_link_libraries(iiServerHost PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(iiServerHost PRIVATE IISERVERHOST_LAN_HOST=1)
+endif()
 add_library(iiServerHost::iiServerHost ALIAS iiServerHost)
 target_compile_features(iiServerHost PUBLIC cxx_std_20)
 target_compile_definitions(iiServerHost PRIVATE IISERVERHOST_BUILDING_LIBRARY)
@@ -44,6 +51,11 @@ set_target_properties(iiServerHost PROPERTIES
 if(BUILD_TESTING)
     include(cmake/TestCertificate.cmake)
     find_package(Qt6 6.8.3 EXACT REQUIRED COMPONENTS Test)
+    add_executable(iiServerHostLanTests tests/lan.cpp)
+    target_link_libraries(iiServerHostLanTests PRIVATE iiServerHost::iiServerHost Qt6::Test)
+    target_compile_definitions(iiServerHostLanTests PRIVATE TEST_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME iiServerHost.lan COMMAND iiServerHostLanTests)
+    set_tests_properties(iiServerHost.lan PROPERTIES TIMEOUT 45)
     add_executable(iiServerHostTests tests/hosting.cpp)
     target_link_libraries(iiServerHostTests PRIVATE iiServerHost::iiServerHost Qt6::Test)
     target_compile_definitions(iiServerHostTests PRIVATE TEST_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}")
@@ -87,8 +99,11 @@ install(TARGETS iiServerHost EXPORT iiServerHostTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES iiServerHost.h ServerHost.h PairingLink.h iiServerHostExport.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES iiServerHost.h ServerHost.h PairingLink.h LanPeer.h iiServerHostExport.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
+if(IISERVERHOST_NEEDS_CRYPTO)
+    install(FILES ThirdParty/OpenSSL-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost/licenses)
+endif()
 install(EXPORT iiServerHostTargets
     FILE iiServerHostTargets.cmake
     NAMESPACE iiServerHost::

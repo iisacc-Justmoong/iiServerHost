@@ -12,3 +12,4 @@ namespace iiServerHost {
 
 #include "ServerHost.h"
 #include "PairingLink.h"
+#include "LanPeer.h"
