@@ -1,5 +1,11 @@
 # iiServerHost
 
+## 0.5.0: 표준 파일 전송·NAS·클라우드·서버 호스팅
+
+`FileTransfer`는 libcurl 기반 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP/SCP, TFTP, Gopher(s), 로컬 파일을 전송한다. `StorageBridge`는 rclone에 구성된 NAS·클라우드·가상 저장소 전체에 공통 파일 작업을 제공한다. `FileProtocolServer`는 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP, S3, NFSv3, restic 서버를 관리한다. 바이너리 스트리밍, 다운로드의 원자적 교체·SHA-256, 작업 취소, 자격 증명 분리와 실제 엔진 기능 조회를 포함한다. 기존 Peer·LanPeer API는 유지한다.
+
+[지원 행렬, C++ API, 명령줄 실행, 의존성 및 검증](docs/FileTransfer.md)을 참고한다. 지원 기능은 실제 libcurl/rclone 빌드와 각 백엔드에 따르며, 모든 서비스의 모든 기능을 보장하는 의미가 아니다.
+
 ## 0.4.1: 탐색한 기기의 직접 LAN 페어링
 
 `createDeviceOffer(peerId)`는 탐색으로 선택한 기기에 묶인 일회용 연결 정보를 만든다. `join()` 이후 양쪽의 `phase()`는 `confirming`이 되고 `verificationCode()`에 같은 12자리 hex 코드(4-4-4 형식)를 표시한다. 호스트가 `confirmDevice()`를 호출하기 전에는 Files 목록이나 바이트를 반환하지 않는다. 코드는 호스트 TLS 인증서 지문·일회용 키·클라이언트 무작위 nonce·기기 ID의 SHA-256에 바인딩된다. 다른 기기 ID, 중복 연결, 만료·취소된 요청은 거부한다. 확인 대기는 최대 60초이다. `pairedDeviceIds()`는 호스트·클라이언트 모두에서 현재 연결 완료된 기기를 제공하므로 목록에 연결 상태를 표시할 수 있다. 탐색 정보는 신뢰 증명이 아니므로 소비 UI가 양쪽 코드를 비교한 뒤 호스트의 명시적 연결 확인을 받아야 한다.
@@ -19,7 +25,7 @@ QR 주소는 RFC 1918 IPv4와 명시적인 테스트 loopback만 허용한다. �
 `iiServerHost.lan`은 로그인이나 SessionAuthenticator를 호출하지 않고 실제 TLS 페어링·파일 바이트·만료·취소·재사용·지문 불일치를 검증한다. 설치 소비자에도 같은 검사를 적용한다.
 
 
-C++20 / Qt 6.8.3 기반의 로컬·원격 앱 호스팅 SDK, 버전 0.3.0이다. 소비 앱은 `Peer` 하나로 자신의 파일을 제공하면서 같은 계정의 다른 호스트에 접근한다. 가까운 기기는 로컬 TLS 연결을 먼저 사용하고, 해당 주소에 연결할 수 없으면 원격 WebSocket 중계로 전환한다. 양쪽 기기가 중계에 외향 연결하므로 공유기의 포트 포워딩은 필요하지 않다.
+C++20 / Qt 6.8.3 기반의 로컬·원격 앱 호스팅 SDK, 버전 0.5.0이다. 소비 앱은 `Peer` 하나로 자신의 파일을 제공하면서 같은 계정의 다른 호스트에 접근한다. 가까운 기기는 로컬 TLS 연결을 먼저 사용하고, 해당 주소에 연결할 수 없으면 원격 WebSocket 중계로 전환한다. 양쪽 기기가 중계에 외향 연결하므로 공유기의 포트 포워딩은 필요하지 않다.
 
 ## 구성과 신뢰 경계
 

@@ -1,0 +1,3 @@
+# Optional production FTP TLS host. Install in a dedicated interpreter environment.
+pyftpdlib==2.2.0
+pyOpenSSL==26.4.0

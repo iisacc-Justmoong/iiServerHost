@@ -1,0 +1,4 @@
+# Protocol fixtures only. Never imported by the C++ SDK or standard host executable.
+-r ../tools/ftp-requirements.txt
+asyncssh==2.24.0
+impacket==0.13.1
