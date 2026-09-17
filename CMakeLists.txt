@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(iiServerHost VERSION 0.5.0 LANGUAGES CXX)
+project(iiServerHost VERSION 0.6.0 LANGUAGES CXX)
 
 if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     if(DEFINED ENV{HOME})
@@ -20,7 +20,7 @@ include(CTest)
 
 option(BUILD_SHARED_LIBS "Build a shared SDK (disable for iOS)" ON)
 add_library(iiServerHost iiServerHost.h iiServerHost.cpp ServerHost.h iiServerHostExport.h
-    Protocol.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h LanPeer.cpp LanPeer.h
+    Protocol.h BinaryFrame.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h LanPeer.cpp LanPeer.h
     Transfer.h Transfer.cpp StorageBridge.h StorageBridge.cpp)
 set(_transfer_default ON)
 if(IOS OR ANDROID)

@@ -97,7 +97,7 @@ bool LanLink::decode(const QString &text, LanLink *result) {
 
 class LanPeer::Private {
 public:
-    struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; };
+    struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; bool binary = false; };
     LanPeer *q;
     std::unique_ptr<QWebSocketServer> server;
     QPointer<QWebSocket> client;
@@ -146,10 +146,14 @@ public:
             if (!pinned(socket)) { fail("The desktop certificate does not match the QR code."); return; }
             helloSent = true; phase = "verifying";
             clientNonce = randomCode(); verificationCode = verification(joining, clientId, clientNonce);
-            send(socket, {{"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}});
+            send(socket, {{"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}, {"binary", 1}});
             joining.code.clear(); emit q->changed();
         });
         QObject::connect(socket, &QWebSocket::textMessageReceived, q, [this](const QString &text) { clientMessage(parse(text)); });
+        QObject::connect(socket, &QWebSocket::binaryMessageReceived, q, [this, socket](const QByteArray &frame) {
+            if (!clientPaired || !socket->property("iish.binary").toBool()) { fail("Unnegotiated binary frame."); return; }
+            clientMessage(BinaryFrame::decode(frame));
+        });
         QObject::connect(socket, &QWebSocket::errorOccurred, q, [this, socket] {
             connectionError = socket->errorString();
             if (!helloSent && !stopping) openAddress(); else if (!stopping) fail("The local connection failed. Scan a new QR code.");
@@ -172,6 +176,7 @@ public:
         }
         if (type == "paired" && phase == "verifying" && m.value("host").toString() == joining.hostId) {
             clientPaired = true; phase = "paired"; peerName = m.value("name").toString();
+            client->setProperty("iish.binary", m.value("binary") == 1);
             emit q->changed(); emit q->paired(joining.hostId); return;
         }
         if (type == "response" && clientPaired) {
@@ -194,6 +199,7 @@ public:
             for (const auto &other : std::as_const(clients)) if (other.id == id) { reject("This device is already connected."); return; }
             // Consume before opening Files or reporting success. No iisacc cookie is involved.
             verificationCode = expectedPeer.isEmpty() ? QString() : verification(offer, id, m.value("nonce").toString());
+            session.binary = m.value("binary") == 1;
             offer.code.clear(); qr.clear(); session.id = id; session.name = name; session.deadline = QDateTime::currentDateTimeUtc().addSecs(expectedPeer.isEmpty() ? 15 : 60);
             if (!expectedPeer.isEmpty()) {
                 session.awaitingApproval = true; phase = "confirming"; peerName = name;
@@ -207,7 +213,8 @@ public:
         }
         if (type == "confirm" && !session.id.isEmpty() && !session.paired && !session.awaitingApproval && session.deadline > QDateTime::currentDateTimeUtc()) {
             session.paired = true; phase = "paired";
-            send(socket, {{"type", "paired"}, {"host", offer.hostId}, {"name", offer.name}});
+            send(socket, {{"type", "paired"}, {"host", offer.hostId}, {"name", offer.name}, {"binary", session.binary ? 1 : 0}});
+            socket->setProperty("iish.binary", session.binary);
             emit q->changed(); emit q->paired(session.id); return;
         }
         if (type == "request" && session.paired && identifier(m.value("id").toString()) && m.value("payload").isObject()) {
@@ -254,6 +261,10 @@ bool LanPeer::startHost(QString hostId, QString name, RequestHandler handler, QS
             if (d->clients.size() >= 8 || !LanLink::localAddress(socket->peerAddress().toString())) { socket->close(); socket->deleteLater(); continue; }
             d->clients.insert(socket, {{}, {}, false, QDateTime::currentDateTimeUtc().addSecs(5)});
             connect(socket, &QWebSocket::textMessageReceived, this, [this, socket](const QString &text) { d->hostMessage(socket, parse(text)); });
+            connect(socket, &QWebSocket::binaryMessageReceived, this, [this, socket](const QByteArray &frame) {
+                if (!d->clients.value(socket).paired || !socket->property("iish.binary").toBool()) { socket->close(); return; }
+                d->hostMessage(socket, BinaryFrame::decode(frame));
+            });
             connect(socket, &QWebSocket::disconnected, this, [this, socket] {
                 const auto previous = d->clients.take(socket); socket->deleteLater();
                 if (!previous.id.isEmpty() && !previous.paired && d->phase == "verifying") { d->phase = "error"; d->error = "Pairing was interrupted. Show a new QR code."; }
@@ -320,6 +331,7 @@ bool LanPeer::confirmDevice() {
     return false;
 }
 bool LanPeer::connected() const { return d->clientPaired; }
+bool LanPeer::binaryTransferEnabled() const { return d->clientPaired && d->client && d->client->property("iish.binary").toBool(); }
 QString LanPeer::phase() const { return d->phase; }
 QString LanPeer::errorString() const { return d->error; }
 QString LanPeer::qrText() const { return d->qr; }

@@ -33,6 +33,7 @@ public:
     void stop();
     bool hosting() const;
     bool connected() const;
+    bool binaryTransferEnabled() const;
     QString phase() const;
     QString errorString() const;
     QString qrText() const;

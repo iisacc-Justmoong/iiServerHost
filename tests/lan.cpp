@@ -3,11 +3,84 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include "../BinaryFrame.h"
+#include <QWebSocket>
+#include <QSslError>
 
 using namespace iiServerHost;
 class LanTests : public QObject {
     Q_OBJECT
 private slots:
+    void binaryFrameBoundsAndWireSavings() {
+        const QByteArray data(256 * 1024, '\xff');
+        for (const auto &message : {
+            QJsonObject{{"type", "request"}, {"payload", QJsonObject{{"message", QJsonObject{{"data", QString::fromLatin1(data.toBase64())}}}}}},
+            QJsonObject{{"type", "response"}, {"result", QJsonObject{{"result", QJsonObject{{"data", QString::fromLatin1(data.toBase64())}}}}}},
+            QJsonObject{{"type", "response"}, {"result", QJsonObject{{"data", QString::fromLatin1(data.toBase64())}}}}
+        }) {
+            const auto frame = protocol::BinaryFrame::encode(message); QVERIFY(!frame.isEmpty());
+            QCOMPARE(protocol::BinaryFrame::decode(frame), message);
+            const auto json = QJsonDocument(message).toJson(QJsonDocument::Compact);
+            QVERIFY(frame.size() < json.size() * 0.76); QVERIFY(frame.size() < data.size() + 256);
+            qInfo("binary frame=%lld json=%lld payload=%lld", qlonglong(frame.size()), qlonglong(json.size()), qlonglong(data.size()));
+            auto malformed = frame; malformed[0] = 'X'; QVERIFY(protocol::BinaryFrame::decode(malformed).isEmpty());
+            malformed = frame; malformed[4] = '\x7f'; QVERIFY(protocol::BinaryFrame::decode(malformed).isEmpty());
+            QVERIFY(protocol::BinaryFrame::decode(frame.left(8)).isEmpty());
+            QVERIFY(protocol::BinaryFrame::decode(frame + QByteArray(256 * 1024, 'x')).isEmpty());
+        }
+        QVERIFY(protocol::BinaryFrame::encode({{"data", "not a known file path"}}).isEmpty());
+    }
+    void negotiatedBinaryUploadAndDownload() {
+        LanPeer host, client; const QByteArray bytes(256 * 1024, '\x81'); int chunks = 0;
+        QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &request) {
+            if (request.value("op") == "list") return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+            const auto data = request.value("message").toObject().value("data").toString();
+            if (QByteArray::fromBase64(data.toLatin1()) == bytes) ++chunks;
+            return QJsonObject{{"ok", true}, {"result", QJsonObject{{"ok", true}, {"data", data}}}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(client.join(host.createOffer(), "phone", "Phone")); QTRY_VERIFY(client.connected()); QVERIFY(client.binaryTransferEnabled());
+        QSignalSpy completed(&client, &LanPeer::completed);
+        for (int i = 0; i < 4; ++i) QVERIFY(!client.request("desktop", {{"op", "society.sync"},
+            {"message", QJsonObject{{"data", QString::fromLatin1(bytes.toBase64())}}}}).isEmpty());
+        QTRY_COMPARE(completed.size(), 4); QCOMPARE(chunks, 4);
+        for (const auto &result : completed) QCOMPARE(QByteArray::fromBase64(result[1].toJsonObject().value("result").toObject().value("data").toString().toLatin1()), bytes);
+    }
+    void binaryBeforePairingCannotReadFiles() {
+        LanPeer host; int reads = 0;
+        QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
+            ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        LanLink offer; QVERIFY(LanLink::decode(host.createOffer(), &offer));
+        QWebSocket unpaired; QSignalSpy disconnected(&unpaired, &QWebSocket::disconnected);
+        connect(&unpaired, &QWebSocket::sslErrors, &unpaired, [&](const QList<QSslError> &errors) { unpaired.ignoreSslErrors(errors); });
+        connect(&unpaired, &QWebSocket::connected, &unpaired, [&] {
+            const auto frame = protocol::BinaryFrame::encode({{"type", "request"}, {"id", "unpaired"},
+                {"payload", QJsonObject{{"message", QJsonObject{{"data", "YWJj"}}}}}});
+            QVERIFY(!frame.isEmpty()); unpaired.sendBinaryMessage(frame);
+        });
+        unpaired.open(QUrl("wss://127.0.0.1:" + QString::number(offer.port)));
+        QTRY_COMPARE(disconnected.size(), 1); QCOMPARE(reads, 0); QVERIFY(host.pairedDeviceIds().isEmpty());
+    }
+    void oldJsonClientsRemainCompatible() {
+        LanPeer host; const QByteArray bytes(8192, 'L');
+        QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &request) {
+            return request.value("op") == "list" ? QJsonObject{{"ok", true}, {"entries", QJsonArray()}}
+                : QJsonObject{{"ok", true}, {"data", QString::fromLatin1(bytes.toBase64())}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        LanLink offer; QVERIFY(LanLink::decode(host.createOffer(), &offer));
+        QWebSocket old; QSignalSpy binary(&old, &QWebSocket::binaryMessageReceived); bool paired = false, received = false;
+        const auto send = [&](const QJsonObject &value) { old.sendTextMessage(QString::fromUtf8(QJsonDocument(value).toJson(QJsonDocument::Compact))); };
+        connect(&old, &QWebSocket::sslErrors, &old, [&](const QList<QSslError> &errors) { old.ignoreSslErrors(errors); });
+        connect(&old, &QWebSocket::connected, &old, [&] { send({{"type", "pair"}, {"host", "desktop"}, {"code", offer.code}, {"peerId", "old"}, {"name", "Old"}}); });
+        connect(&old, &QWebSocket::textMessageReceived, &old, [&](const QString &text) {
+            const auto value = QJsonDocument::fromJson(text.toUtf8()).object();
+            if (value.value("type") == "ready") send({{"type", "confirm"}});
+            if (value.value("type") == "paired") { paired = true; send({{"type", "request"}, {"id", "request"}, {"payload", QJsonObject{{"op", "read"}}}}); }
+            if (value.value("type") == "response") received = QByteArray::fromBase64(value.value("result").toObject().value("data").toString().toLatin1()) == bytes;
+        });
+        old.open(QUrl("wss://127.0.0.1:" + QString::number(offer.port)));
+        QTRY_VERIFY(paired && received); QCOMPARE(binary.size(), 0);
+    }
     void discoveredDeviceNeedsConfirmationBeforeFiles() {
         LanPeer host, client, wrong;
         int reads = 0;

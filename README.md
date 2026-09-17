@@ -1,5 +1,11 @@
 # iiServerHost
 
+## 0.6.0: LAN 파일 본문의 바이너리 전송
+
+`LanPeer`의 TLS 페어링은 `binary=1`을 협상한다. 양쪽이 지원하면 파일 `data`만 256 KiB 이하 원시 바이너리 본문으로 전송한다. `binaryTransferEnabled()`로 클라이언트의 협상 결과를 확인한다. 다른 제어 메시지·구버전 클라이언트·relay 경로는 JSON을 유지하며 기존 요청 핸들러 API도 유지한다. 파일 본문의 Base64 인코딩으로 늘어나던 네트워크 바이트를 약 25% 줄인다. 내부 JSON API의 인코딩 비용까지 제거한 것은 아니다.
+
+프레임은 `ISB1`, big-endian 32-bit JSON 헤더 길이, 최대 64 KiB 헤더, 최대 256 KiB 파일 bytes 순서이다. 헤더는 허용된 파일 필드 위치와 나머지 원래 메시지를 담는다. 길이·위치·중복 필드·협상 상태를 검증하며 페어링 전 바이너리 요청은 거부한다. `iiServerHost.lan`이 실제 TLS 양방향 전송, 프레임 상한, 이전 JSON peer와의 호환성을 검사한다. TCP 위 WebSocket 전송이며 QUIC 구현은 아니다.
+
 ## 0.5.0: 표준 파일 전송·NAS·클라우드·서버 호스팅
 
 `FileTransfer`는 libcurl 기반 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP/SCP, TFTP, Gopher(s), 로컬 파일을 전송한다. `StorageBridge`는 rclone에 구성된 NAS·클라우드·가상 저장소 전체에 공통 파일 작업을 제공한다. `FileProtocolServer`는 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP, S3, NFSv3, restic 서버를 관리한다. 바이너리 스트리밍, 다운로드의 원자적 교체·SHA-256, 작업 취소, 자격 증명 분리와 실제 엔진 기능 조회를 포함한다. 기존 Peer·LanPeer API는 유지한다.

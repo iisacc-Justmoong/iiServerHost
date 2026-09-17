@@ -1,5 +1,6 @@
 #pragma once
 #include "ServerHost.h"
+#include "BinaryFrame.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkProxy>
@@ -33,8 +34,13 @@ inline void limits(QWebSocket *socket) {
     socket->setProxy(QNetworkProxy::NoProxy);
 }
 inline bool send(QWebSocket *socket, const QJsonObject &message) {
-    const auto bytes = QJsonDocument(message).toJson(QJsonDocument::Compact);
     if (!socket || socket->state() != QAbstractSocket::ConnectedState) return false;
+    const auto frame = socket->property("iish.binary").toBool() ? BinaryFrame::encode(message) : QByteArray();
+    if (!frame.isEmpty()) {
+        if (socket->bytesToWrite() > 4 * WireLimit) { socket->close(QWebSocketProtocol::CloseCodeTooMuchData, "Capacity exceeded"); return false; }
+        return socket->sendBinaryMessage(frame) >= 0;
+    }
+    const auto bytes = QJsonDocument(message).toJson(QJsonDocument::Compact);
     if (bytes.size() > WireLimit || socket->bytesToWrite() > 4 * WireLimit) {
         socket->close(QWebSocketProtocol::CloseCodeTooMuchData, "Capacity exceeded"); return false;
     }
