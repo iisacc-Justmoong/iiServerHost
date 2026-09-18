@@ -131,7 +131,7 @@ cmake --build build/consumer/build --parallel 4
 ctest --test-dir build/consumer/build --output-on-failure
 ```
 
-`INSTALL_PREFIX=... ./install.sh`도 같은 검증을 실행한다. 설치 타깃은 `iiServerHost::iiServerHost`, 공개 헤더는 `iiServerHost.h`, `ServerHost.h`, `PairingLink.h`, `iiServerHostExport.h`이다. 헤더 간 순환 참조를 두지 않는다. iOS에는 `BUILD_SHARED_LIBS=OFF`, `BUILD_TESTING=OFF`를 사용한다. 기존 `helloWorld()` ABI는 유지한다. 모든 빌드 산출물은 `build/` 아래에 둔다.
+`INSTALL_PREFIX=... ./install.sh`도 같은 검증을 실행한다. 설치 타깃은 `iiServerHost::iiServerHost`, 공개 헤더는 `src/iiServerHost.h`, `src/ServerHost.h`, `src/PairingLink.h`, `src/iiServerHostExport.h`이다. 헤더 간 순환 참조를 두지 않는다. iOS에는 `BUILD_SHARED_LIBS=OFF`, `BUILD_TESTING=OFF`를 사용한다. 기존 `helloWorld()` ABI는 유지한다. 모든 빌드 산출물은 `build/` 아래에 둔다.
 
 ## 의존성 검토
 
@@ -146,3 +146,7 @@ macOS Secure Transport가 로그인 키체인에 서버 키를 넣지 않도록,
 SPDX-License-Identifier: AGPL-3.0-only. 자체 코드는 [LICENSE](LICENSE)를 따른다. Qt 등 외부 라이브러리의 별도 라이선스를 대체하지 않는다.
 
 `ii-server-host`는 소비 앱 없이도 같은 SDK를 사용하는 진단용 실행 파일이다. `--root`, `--relay`, `--id`, `--credential-file`로 호스팅하고, `--peer ID --path relative/path --read`로 한 청크를 읽거나 `--read` 없이 목록을 읽는다. 공개 LAN 리스너에는 `--certificate`와 `--key`를 함께 전달한다. `--no-local`로 원격 경로를 강제할 수 있다. 자격증명 파일은 소유자만 읽을 수 있게 두고 버전 관리에 포함하지 않는다. `iiServerHost.process_hosting`은 HTTP 인증 검증 서버와 중계·호스트·클라이언트의 별도 프로세스를 통해 양쪽 경로에서 실제 파일 바이트를 확인한다.
+
+## Source layout
+
+Implementation files and their headers live together under `src/`. Existing feature and platform subdirectories retain their responsibilities. Build configuration, tests, documentation, resources, and maintenance scripts remain at the project root. Configure and build using the repository-local `build/` directory.

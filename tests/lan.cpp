@@ -3,7 +3,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
-#include "../BinaryFrame.h"
+#include "../src/BinaryFrame.h"
 #include <QWebSocket>
 #include <QSslError>
 

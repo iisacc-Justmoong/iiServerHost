@@ -19,9 +19,9 @@ include(CMakePackageConfigHelpers)
 include(CTest)
 
 option(BUILD_SHARED_LIBS "Build a shared SDK (disable for iOS)" ON)
-add_library(iiServerHost iiServerHost.h iiServerHost.cpp ServerHost.h iiServerHostExport.h
-    Protocol.h BinaryFrame.h SessionAuthenticator.cpp RelayServer.cpp Peer.cpp FileShare.cpp PairingLink.cpp PairingLink.h LanPeer.cpp LanPeer.h
-    Transfer.h Transfer.cpp StorageBridge.h StorageBridge.cpp)
+add_library(iiServerHost src/iiServerHost.h src/iiServerHost.cpp src/ServerHost.h src/iiServerHostExport.h
+    src/Protocol.h src/BinaryFrame.h src/SessionAuthenticator.cpp src/RelayServer.cpp src/Peer.cpp src/FileShare.cpp src/PairingLink.cpp src/PairingLink.h src/LanPeer.cpp src/LanPeer.h
+    src/Transfer.h src/Transfer.cpp src/StorageBridge.h src/StorageBridge.cpp)
 set(_transfer_default ON)
 if(IOS OR ANDROID)
     set(_transfer_default OFF)
@@ -44,7 +44,7 @@ if(NOT IOS AND NOT ANDROID)
     install(FILES tools/ftp_server.py tools/ftp-requirements.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
     set(IISERVERHOST_NEEDS_CRYPTO TRUE)
     find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
-    target_sources(iiServerHost PRIVATE LanIdentity.cpp LanIdentity.h)
+    target_sources(iiServerHost PRIVATE src/LanIdentity.cpp src/LanIdentity.h)
     target_link_libraries(iiServerHost PRIVATE OpenSSL::Crypto)
     target_compile_definitions(iiServerHost PRIVATE IISERVERHOST_LAN_HOST=1)
 endif()
@@ -56,7 +56,7 @@ if(NOT BUILD_SHARED_LIBS)
 endif()
 target_link_libraries(iiServerHost PUBLIC Qt6::Core Qt6::Network Qt6::WebSockets)
 target_include_directories(iiServerHost PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 set_target_properties(iiServerHost PROPERTIES
@@ -152,7 +152,7 @@ install(TARGETS iiServerHost EXPORT iiServerHostTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES iiServerHost.h ServerHost.h PairingLink.h LanPeer.h Transfer.h StorageBridge.h iiServerHostExport.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES src/iiServerHost.h src/ServerHost.h src/PairingLink.h src/LanPeer.h src/Transfer.h src/StorageBridge.h src/iiServerHostExport.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
 install(FILES docs/FileTransfer.md DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost/docs)
 install(FILES ThirdParty/Curl-LICENSE.txt ThirdParty/Rclone-LICENSE.txt
