@@ -32,6 +32,9 @@ QString randomCode() {
     for (qsizetype i = 0; i < bytes.size(); i += 4) { const auto value = QRandomGenerator::system()->generate(); memcpy(bytes.data() + i, &value, 4); }
     return QString::fromLatin1(bytes.toHex());
 }
+QByteArray authenticationContext(const LanLink &link, const QString &peer, const QString &nonce) {
+    return QJsonDocument(QJsonArray{link.hostId, peer, link.fingerprint, link.code, nonce}).toJson(QJsonDocument::Compact);
+}
 QString verification(const LanLink &link, const QString &peerId, const QString &nonce) {
     const auto digest = QCryptographicHash::hash((link.fingerprint + ':' + link.code + ':' + peerId + ':' + nonce).toUtf8(), QCryptographicHash::Sha256).toHex().left(12).toUpper();
     return QString::fromLatin1(digest.mid(0, 4) + '-' + digest.mid(4, 4) + '-' + digest.mid(8, 4));
@@ -97,13 +100,17 @@ bool LanLink::decode(const QString &text, LanLink *result) {
 
 class LanPeer::Private {
 public:
-    struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; bool binary = false; };
+    struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; bool binary = false; QByteArray authentication; };
     LanPeer *q;
     std::unique_ptr<QWebSocketServer> server;
     QPointer<QWebSocket> client;
     QHash<QWebSocket *, Session> clients;
     QHash<QString, QDateTime> requests;
     RequestHandler handler;
+    PairingSigner signer;
+    PairingVerifier verifier;
+    QByteArray authentication;
+    bool authenticated = false;
     LanLink offer, joining;
     QString phase = "idle", error, qr, peerName, clientId, clientName, connectionError;
     QString expectedPeer, verificationCode, clientNonce;
@@ -146,7 +153,11 @@ public:
             if (!pinned(socket)) { fail("The desktop certificate does not match the QR code."); return; }
             helloSent = true; phase = "verifying";
             clientNonce = randomCode(); verificationCode = verification(joining, clientId, clientNonce);
-            send(socket, {{"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}, {"binary", 1}});
+            authenticated = false;
+            authentication = authenticationContext(joining, clientId, clientNonce);
+            const auto proof = signer ? signer("client\n" + authentication) : QJsonObject{};
+            if ((signer || verifier) && (!signer || !verifier || proof.isEmpty())) { fail("Account authentication required."); return; }
+            send(socket, {{"proof", proof}, {"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}, {"binary", 1}});
             joining.code.clear(); emit q->changed();
         });
         QObject::connect(socket, &QWebSocket::textMessageReceived, q, [this](const QString &text) { clientMessage(parse(text)); });
@@ -165,6 +176,10 @@ public:
     void clientMessage(const QJsonObject &m) {
         const auto type = m.value("type").toString();
         if (type == "error") { fail(m.value("error").toString("Pairing failed. Scan a new QR code.")); return; }
+        if ((type == "verify" || type == "ready") && (signer || verifier)) {
+            if (!verifier || !verifier("host\n" + authentication, m.value("proof").toObject())) { fail("Host account authentication failed."); return; }
+            authenticated = true;
+        }
         if (type == "verify" && phase == "verifying" && m.value("host").toString() == joining.hostId) {
             phase = "confirming"; deadline = QDateTime::currentDateTimeUtc().addSecs(60); emit q->changed(); return;
         }
@@ -175,6 +190,7 @@ public:
             send(client, {{"type", "confirm"}}); return;
         }
         if (type == "paired" && phase == "verifying" && m.value("host").toString() == joining.hostId) {
+            if ((signer || verifier) && !authenticated) { fail("Host account authentication required."); return; }
             clientPaired = true; phase = "paired"; peerName = m.value("name").toString();
             client->setProperty("iish.binary", m.value("binary") == 1);
             emit q->changed(); emit q->paired(joining.hostId); return;
@@ -197,19 +213,26 @@ public:
                 reject("This QR code is expired, cancelled, or already used. Show a new QR code."); return;
             }
             for (const auto &other : std::as_const(clients)) if (other.id == id) { reject("This device is already connected."); return; }
+            session.authentication = authenticationContext(offer, id, m.value("nonce").toString());
+            if ((signer || verifier) && (!signer || !verifier || !hexToken(m.value("nonce").toString())
+                || !verifier("client\n" + session.authentication, m.value("proof").toObject()))) {
+                reject("Device account authentication failed."); return;
+            }
+            const auto proof = signer ? signer("host\n" + session.authentication) : QJsonObject{};
+            if (signer && proof.isEmpty()) { reject("Host account authentication expired."); return; }
             // Consume before opening Files or reporting success. No iisacc cookie is involved.
             verificationCode = expectedPeer.isEmpty() ? QString() : verification(offer, id, m.value("nonce").toString());
             session.binary = m.value("binary") == 1;
             offer.code.clear(); qr.clear(); session.id = id; session.name = name; session.deadline = QDateTime::currentDateTimeUtc().addSecs(expectedPeer.isEmpty() ? 15 : 60);
             if (!expectedPeer.isEmpty()) {
                 session.awaitingApproval = true; phase = "confirming"; peerName = name;
-                send(socket, {{"type", "verify"}, {"host", offer.hostId}}); emit q->changed(); return;
+                send(socket, {{"proof", proof}, {"type", "verify"}, {"host", offer.hostId}}); emit q->changed(); return;
             }
             phase = "verifying"; peerName = name;
             QJsonObject files;
             try { files = handler(id, {{"op", "list"}, {"path", ""}}); } catch (...) { files = protocol::error("host_error"); }
             if (!files.value("ok").toBool() || !files.value("entries").isArray()) { error = "The desktop could not open its Files."; phase = "error"; reject(error); emit q->changed(); return; }
-            send(socket, {{"type", "ready"}, {"host", offer.hostId}, {"files", files}}); emit q->changed(); return;
+            send(socket, {{"proof", proof}, {"type", "ready"}, {"host", offer.hostId}, {"files", files}}); emit q->changed(); return;
         }
         if (type == "confirm" && !session.id.isEmpty() && !session.paired && !session.awaitingApproval && session.deadline > QDateTime::currentDateTimeUtc()) {
             session.paired = true; phase = "paired";
@@ -305,6 +328,9 @@ void LanPeer::stop() {
     for (const auto &id : requests) emit completed(id, protocol::error("stopped"), "local");
     d->stopping = false; emit changed();
 }
+void LanPeer::setPairingAuthentication(PairingSigner signer, PairingVerifier verifier) {
+    stop(); d->signer = std::move(signer); d->verifier = std::move(verifier);
+}
 bool LanPeer::hosting() const { return bool(d->server); }
 QString LanPeer::createDeviceOffer(const QString &peerId, int lifetimeSeconds) {
     if (!identifier(peerId) || peerId == d->offer.hostId) return {};
@@ -319,6 +345,8 @@ bool LanPeer::confirmDevice() {
         auto &session = d->clients[socket];
         if (!session.awaitingApproval || session.deadline <= QDateTime::currentDateTimeUtc()) continue;
         session.awaitingApproval = false; session.deadline = QDateTime::currentDateTimeUtc().addSecs(15);
+        const auto proof = d->signer ? d->signer("host\n" + session.authentication) : QJsonObject{};
+        if (d->signer && proof.isEmpty()) { socket->close(); return false; }
         QJsonObject files;
         try { files = d->handler(session.id, {{"op", "list"}, {"path", ""}}); } catch (...) { files = protocol::error("host_error"); }
         if (!files.value("ok").toBool() || !files.value("entries").isArray()) {
@@ -326,7 +354,7 @@ bool LanPeer::confirmDevice() {
             send(socket, {{"type", "error"}, {"error", d->error}}); socket->close(); emit changed(); return false;
         }
         d->phase = "verifying";
-        send(socket, {{"type", "ready"}, {"host", d->offer.hostId}, {"files", files}}); emit changed(); return true;
+        send(socket, {{"proof", proof}, {"type", "ready"}, {"host", d->offer.hostId}, {"files", files}}); emit changed(); return true;
     }
     return false;
 }

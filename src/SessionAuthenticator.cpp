@@ -23,7 +23,10 @@ void SessionAuthenticator::authenticate(const QByteArray &cookie, AuthCompletion
     request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
     request.setTransferTimeout(5000);
-    auto *reply = d->network.get(request);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Origin", d->url.adjusted(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment | QUrl::RemoveUserInfo).toEncoded());
+    auto *reply = d->network.post(request,
+        R"({"query":"query AccountSession { accountSession { account { sub } } }"})");
     reply->setReadBufferSize(65537);
     auto bytes = std::make_shared<QByteArray>();
     connect(reply, &QNetworkReply::readyRead, reply, [reply, bytes] {
@@ -34,8 +37,11 @@ void SessionAuthenticator::authenticate(const QByteArray &cookie, AuthCompletion
         bytes->append(reply->readAll());
         Principal principal;
         if (reply->error() == QNetworkReply::NoError && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200
-            && bytes->size() <= 65536) {
-            const auto account = QJsonDocument::fromJson(*bytes).object().value("account").toObject();
+            && bytes->size() <= 65536
+            && reply->header(QNetworkRequest::ContentTypeHeader).toString().section(';', 0, 0).trimmed().compare("application/json", Qt::CaseInsensitive) == 0) {
+            const auto envelope = QJsonDocument::fromJson(*bytes).object();
+            const auto account = envelope.contains("errors") ? QJsonObject{}
+                : envelope.value("data").toObject().value("accountSession").toObject().value("account").toObject();
             principal.accountId = account.value("sub").toString();
             principal.expiresAt = QDateTime::currentDateTimeUtc().addSecs(60);
             if (!protocol::live(principal)) principal = {};

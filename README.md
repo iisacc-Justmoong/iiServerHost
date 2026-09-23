@@ -36,7 +36,7 @@ C++20 / Qt 6.8.3 기반의 로컬·원격 앱 호스팅 SDK, 버전 0.5.0이다.
 ## 구성과 신뢰 경계
 
 - `RelayServer`: 인증된 계정·서비스별 기기 목록, 일회용 로컬 접속표, 요청 중계이다. 파일을 저장하지 않는다. 서로 다른 계정의 목록과 요청을 격리한다.
-- `SessionAuthenticator`: 고정한 HTTPS `/Account/Session`에 쿠키를 보내 검증된 `account.sub`를 읽는다. `accountId` 표시 문자열이나 클라이언트가 선언한 계정은 권한 증명이 아니다. 응답 쿠키·캐시·리디렉션은 사용하지 않는다.
+- `SessionAuthenticator`: 고정한 HTTPS `/Account/GraphQL`에 쿠키를 보내 검증된 `account.sub`를 읽는다. `accountId` 표시 문자열이나 클라이언트가 선언한 계정은 권한 증명이 아니다. 응답 쿠키·캐시·리디렉션은 사용하지 않는다.
 - `Peer`: 호스트 등록, 기기 검색, 로컬 우선 전송, 원격 전환, 지수형 재접속, 요청 시간 제한을 담당한다. 같은 `service`의 호스트만 표시한다.
 - `FileShare`: 루트 아래 목록·메타데이터·분할 읽기·새 파일 생성·디렉터리 생성이다. 애플리케이션은 `RequestHandler`로 다른 저장소를 연결할 수 있다. iiServerHost가 Society를 참조하지 않는다.
 
@@ -111,7 +111,7 @@ Unix 파일 제공은 `openat`, `O_NOFOLLOW`, 디렉터리 FD 및 inode/device �
 ```sh
 build/ii-server-relay --address 0.0.0.0 --port 9443 \
   --certificate /secure/fullchain.pem --key /secure/private-key.pem \
-  --session-url https://iisacc.com/Account/Session
+  --session-url https://iisacc.com/Account/GraphQL
 ```
 
 기존 HTTPS reverse proxy를 사용할 때는 중계를 `127.0.0.1:9443`에 바인딩하고 외부에 WSS만 제공한다. proxy는 WebSocket upgrade를 지원하고 연결 수명은 60초보다 길어야 한다. 소비 앱은 공용 중계 URL을 설정해야 한다. 이 저장소의 구현·loopback 검증은 공용 서버 배포나 다른 물리 네트워크에서의 실행 증거가 아니다. 새로운 유료 인프라를 생성하지 않는다.
@@ -150,3 +150,13 @@ SPDX-License-Identifier: AGPL-3.0-only. 자체 코드는 [LICENSE](LICENSE)를 �
 ## Source layout
 
 Implementation files and their headers live together under `src/`. Existing feature and platform subdirectories retain their responsibilities. Build configuration, tests, documentation, resources, and maintenance scripts remain at the project root. Configure and build using the repository-local `build/` directory.
+
+## 계정 GraphQL 인증
+
+`SessionAuthenticator`와 `--session-url`은 GraphQL endpoint를 받는다. 기본값은
+`https://iisacc.com/Account/GraphQL`이다. `POST` 본문은
+`{"query":"query AccountSession { accountSession { account { sub } } }"}`이며
+`data.accountSession.account.sub`만 인증 주체로 읽는다. 오류가 있는 부분 응답, null 계정,
+잘못된 Content-Type, 리디렉션은 인증하지 않는다. 릴레이와 서버 endpoint를 함께 갱신한다.
+
+LAN applications can require mutual account proofs with `setPairingAuthentication`. Proofs bind both peer IDs, pinned certificate, one-use offer and client nonce with separate client/host roles. Authentication precedes Files access. Legacy clients fail closed when callbacks are installed.

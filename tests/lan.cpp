@@ -6,11 +6,48 @@
 #include "../src/BinaryFrame.h"
 #include <QWebSocket>
 #include <QSslError>
+#include <QMessageAuthenticationCode>
 
 using namespace iiServerHost;
 class LanTests : public QObject {
     Q_OBJECT
 private slots:
+    void accountProofRequiredBeforeFiles_data() {
+        QTest::addColumn<QByteArray>("clientKey");
+        QTest::newRow("same-account") << QByteArray("account-one");
+        QTest::newRow("different-account") << QByteArray("account-two");
+        QTest::newRow("legacy-client") << QByteArray();
+    }
+    void accountProofRequiredBeforeFiles() {
+        QFETCH(QByteArray, clientKey);
+        const auto authenticate = [](LanPeer &peer, QByteArray key) {
+            peer.setPairingAuthentication([key](const QByteArray &context) {
+                return QJsonObject{{"mac", QString::fromLatin1(QMessageAuthenticationCode::hash(context, key, QCryptographicHash::Sha256).toHex())}};
+            }, [key](const QByteArray &context, const QJsonObject &proof) {
+                return proof.value("mac").toString().toLatin1() == QMessageAuthenticationCode::hash(context, key, QCryptographicHash::Sha256).toHex();
+            });
+        };
+        LanPeer host, client; int reads = 0;
+        authenticate(host, "account-one");
+        if (!clientKey.isEmpty()) authenticate(client, clientKey);
+        QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
+            ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(client.join(host.createOffer(), "phone", "Phone"));
+        if (clientKey == "account-one") { QTRY_VERIFY(client.connected()); QCOMPARE(reads, 1); }
+        else { QTRY_COMPARE(client.phase(), QString("error")); QCOMPARE(reads, 0); QVERIFY(host.pairedDeviceIds().isEmpty()); }
+    }
+    void authenticatedClientRejectsLegacyHost() {
+        LanPeer host, client;
+        client.setPairingAuthentication([](const QByteArray &) { return QJsonObject{{"proof", "client"}}; },
+            [](const QByteArray &, const QJsonObject &) { return false; });
+        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) {
+            return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
+        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(client.join(host.createOffer(), "phone", "Phone"));
+        QTRY_COMPARE(client.phase(), QString("error")); QVERIFY(!client.connected());
+        QTRY_VERIFY(host.pairedDeviceIds().isEmpty());
+    }
     void binaryFrameBoundsAndWireSavings() {
         const QByteArray data(256 * 1024, '\xff');
         for (const auto &message : {

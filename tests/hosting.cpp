@@ -1,3 +1,4 @@
+#include <QJsonDocument>
 #include <iiServerHost.h>
 #include <QFile>
 #include <QJsonArray>
@@ -167,17 +168,21 @@ private slots:
                     s->disconnectFromHost(); return;
                 }
                 const bool alice = bytes.toLower().contains("cookie: alice");
-                QByteArray body = alice ? R"({"account":{"sub":"verified-alice"}})" : R"({"account":null})";
+                QByteArray body = alice ? R"({"data":{"accountSession":{"account":{"sub":"verified-alice"}}}})" : R"({"data":{"accountSession":{"account":null}}})";
+                if (bytes.toLower().contains("cookie: partial")) body = R"({"data":{"accountSession":{"account":{"sub":"forged"}}},"errors":[{"message":"Failed"}]})";
                 s->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nSet-Cookie: injected=secret\r\nConnection: close\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\n\r\n" + body);
                 s->disconnectFromHost();
             });
             connect(s, &QTcpSocket::disconnected, s, &QObject::deleteLater);
         });
-        SessionAuthenticator auth(QUrl(QString("http://127.0.0.1:%1/Account/Session").arg(http.serverPort())));
+        SessionAuthenticator auth(QUrl(QString("http://127.0.0.1:%1/Account/GraphQL").arg(http.serverPort())));
         QList<Principal> verified;
         auth.authenticate("alice", [&](Principal p) { verified.append(p); });
         QTRY_COMPARE(verified.size(), 1);
         QCOMPARE(verified[0].accountId, "verified-alice");
+        QVERIFY(seen[0].startsWith("POST /Account/GraphQL "));
+        const auto input = QJsonDocument::fromJson(seen[0].mid(seen[0].indexOf("\r\n\r\n") + 4)).object();
+        QCOMPARE(input.value("query").toString(), QString("query AccountSession { accountSession { account { sub } } }"));
         auth.authenticate("bob", [&](Principal p) { verified.append(p); });
         QTRY_COMPARE(verified.size(), 2);
         QVERIFY(verified[1].accountId.isEmpty());
@@ -186,6 +191,9 @@ private slots:
         QTRY_COMPARE(verified.size(), 3);
         QVERIFY(verified[2].accountId.isEmpty());
         QCOMPARE(seen.size(), 3);
+        auth.authenticate("partial", [&](Principal p) { verified.append(p); });
+        QTRY_COMPARE(verified.size(), 4);
+        QVERIFY(verified[3].accountId.isEmpty());
     }
     void tlsLocalPinAndRelayTrust() {
         QVERIFY(QSslSocket::supportsSsl());

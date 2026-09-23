@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
     QCommandLineParser parser; parser.addHelpOption(); parser.addVersionOption();
     parser.addOptions({{{"a", "address"}, "Listen address; public addresses require TLS.", "address", "127.0.0.1"},
         {{"p", "port"}, "Listen port.", "port", "9443"},
-        {"session-url", "Trusted account session verification endpoint.", "url", "https://iisacc.com/Account/Session"},
+        {"session-url", "Trusted account session verification endpoint.", "url", "https://iisacc.com/Account/GraphQL"},
         {"certificate", "PEM TLS certificate chain.", "path"}, {"key", "PEM TLS private key.", "path"}});
     parser.process(app);
     QSslConfiguration tls;

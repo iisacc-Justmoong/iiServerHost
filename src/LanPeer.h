@@ -29,6 +29,10 @@ public:
     QString verificationCode() const;
     bool confirmDevice();
     bool join(const QString &qr, QString peerId, QString name);
+    using PairingSigner = std::function<QJsonObject(const QByteArray &)>;
+    using PairingVerifier = std::function<bool(const QByteArray &, const QJsonObject &)>;
+    // Both callbacks are required when authentication is configured.
+    void setPairingAuthentication(PairingSigner signer, PairingVerifier verifier);
     void cancelPairing();
     void stop();
     bool hosting() const;
