@@ -6,20 +6,20 @@ iiServerHost 0.5.0은 기존 계정 기반 WebSocket 전송에 `FileTransfer`, `
 
 | 방식 | 클라이언트 | 자체 서버 | 구현 |
 | --- | --- | --- | --- |
-| HTTP / HTTPS | 다운로드, PUT 업로드 | 파일 제공 | libcurl / rclone |
-| WebDAV / WebDAVS | 다운로드, PUT 업로드, PROPFIND 목록 | 읽기·쓰기, 표준 WebDAV 작업 | libcurl / rclone |
-| FTP | 다운로드, 업로드, 목록 | 읽기·쓰기 | libcurl / rclone |
-| FTPS: 연결 시작부터 TLS | 다운로드, 업로드, 목록 | 읽기·쓰기, 제어·데이터 TLS 필수 | libcurl / pyftpdlib |
-| FTPES: AUTH TLS | 다운로드, 업로드, 목록 | 읽기·쓰기, 제어·데이터 TLS 필수 | libcurl / pyftpdlib |
-| SFTP | 다운로드, 업로드, 목록 | 읽기·쓰기, SSH 호스트 키 | libcurl / rclone |
-| SCP | 다운로드, 업로드 | 이 SDK의 서버에는 포함되지 않는다 | libcurl |
-| SMB / CIFS | 구성된 NAS의 읽기·쓰기·목록 | Samba/OS 서버를 별도로 운영한다 | rclone |
-| S3 호환 저장소 | 객체·디렉터리 복사, 목록, 검증; HTTP SigV4 전송 | S3 API, SigV4 인증, 선택적 TLS | rclone / libcurl |
-| NFSv3 | OS에 마운트된 경로를 로컬 파일로 사용 | 읽기·쓰기 | rclone |
-| restic REST | restic 표준 클라이언트가 접속 | 저장소 제공, 선택적 TLS | rclone |
-| TFTP | 다운로드, 업로드 | 포함되지 않는다 | libcurl |
-| Gopher / Gophers | 바이너리 다운로드 | 포함되지 않는다 | libcurl |
-| 로컬 파일 / 마운트된 공유 폴더 | 다운로드, 업로드, 디렉터리 복사 | 위 서버들의 파일 루트로 사용 | Qt / libcurl / rclone |
+| HTTP / HTTPS | 다운로드, PUT 업로드 | 파일 제공 |libcurl / rclone|
+| WebDAV / WebDAVS | 다운로드, PUT 업로드, PROPFIND 목록 | 읽기·쓰기, 표준 WebDAV 작업 |libcurl / rclone|
+| FTP | 다운로드, 업로드, 목록 | 읽기·쓰기 |libcurl / rclone|
+| FTPS: 연결 시작부터 TLS | 다운로드, 업로드, 목록 | 읽기·쓰기, 제어·데이터 TLS 필수 |libcurl / pyftpdlib|
+| FTPES: AUTH TLS | 다운로드, 업로드, 목록 | 읽기·쓰기, 제어·데이터 TLS 필수 |libcurl / pyftpdlib|
+| SFTP | 다운로드, 업로드, 목록 | 읽기·쓰기, SSH 호스트 키 |libcurl / rclone|
+| SCP | 다운로드, 업로드 | 이 SDK의 서버에는 포함되지 않는다 |libcurl|
+| SMB / CIFS | 구성된 NAS의 읽기·쓰기·목록 | Samba/OS 서버를 별도로 운영한다 |rclone|
+| S3 호환 저장소 | 객체·디렉터리 복사, 목록, 검증; HTTP SigV4 전송 | S3 API, SigV4 인증, 선택적 TLS |rclone / libcurl|
+|NFSv3| OS에 마운트된 경로를 로컬 파일로 사용 | 읽기·쓰기 |rclone|
+|Restic REST| restic 표준 클라이언트가 접속 | 저장소 제공, 선택적 TLS |rclone|
+| TFTP | 다운로드, 업로드 | 포함되지 않는다 |libcurl|
+|Gopher / Gophers| 바이너리 다운로드 | 포함되지 않는다 |libcurl|
+| 로컬 파일 / 마운트된 공유 폴더 | 다운로드, 업로드, 디렉터리 복사 | 위 서버들의 파일 루트로 사용 |Qt / libcurl / rclone|
 | 기존 Society 계정 기반 WS/WSS | 기존 `Peer`, `LanPeer` API | 기존 `RelayServer`, `Peer` API | Qt WebSockets |
 
 직접 전송의 지원 여부는 `FileTransfer::protocols()` 또는 `ii-file-transfer --capabilities`가 반환하는 **실제 연결된 libcurl**의 기능으로 결정한다. 이 개발 환경의 libcurl 8.22.0에서는 13개 URL 스킴을 제공한다. SSH가 빠진 다른 libcurl 빌드에서는 SFTP/SCP가 목록에 나타나지 않는다. SMB/SMBS를 포함한 libcurl에서는 해당 스킴도 제공하지만, 현대 NAS 연결에는 rclone의 SMB 백엔드를 사용한다. libcurl의 SMBS를 SMB3의 자체 암호화와 동일한 의미로 취급하지 않는다.

@@ -1,50 +1,62 @@
 # iiServerHost
 
-## 0.6.0: LAN 파일 본문의 바이너리 전송
+<a id="060-lan-파일-본문의-바이너리-전송"></a>
 
-`LanPeer`의 TLS 페어링은 `binary=1`을 협상한다. 양쪽이 지원하면 파일 `data`만 256 KiB 이하 원시 바이너리 본문으로 전송한다. `binaryTransferEnabled()`로 클라이언트의 협상 결과를 확인한다. 다른 제어 메시지·구버전 클라이언트·relay 경로는 JSON을 유지하며 기존 요청 핸들러 API도 유지한다. 파일 본문의 Base64 인코딩으로 늘어나던 네트워크 바이트를 약 25% 줄인다. 내부 JSON API의 인코딩 비용까지 제거한 것은 아니다.
+## 0.6.0: Binary transmission of LAN  file body content
 
-프레임은 `ISB1`, big-endian 32-bit JSON 헤더 길이, 최대 64 KiB 헤더, 최대 256 KiB 파일 bytes 순서이다. 헤더는 허용된 파일 필드 위치와 나머지 원래 메시지를 담는다. 길이·위치·중복 필드·협상 상태를 검증하며 페어링 전 바이너리 요청은 거부한다. `iiServerHost.lan`이 실제 TLS 양방향 전송, 프레임 상한, 이전 JSON peer와의 호환성을 검사한다. TCP 위 WebSocket 전송이며 QUIC 구현은 아니다.
+`LanPeer` 's TLS  pairing negotiates `binary=1` . If both sides support it, only file `data`  is transmitted as 256   KiB  or less raw binary body. The client's negotiation result is confirmed with `binaryTransferEnabled()` . Other control messages, legacy clients, and relay paths maintain JSON, and the existing request handler API is also maintained. The network bytes that were increasing with Base64  encoding of the file body are reduced by about 25% . It is not even removing the encoding cost of the internal JSON  API.
 
-## 0.5.0: 표준 파일 전송·NAS·클라우드·서버 호스팅
+The frame is `ISB1` , big-endian 32-bit JSON  header length, up to 64   KiB  header, up to 256   KiB  file bytes order. The header contains allowed file field positions and the rest of the original message. Length, position, duplicate fields, and negotiation status are validated, and binary requests before pairing are rejected. `iiServerHost.lan`  checks actual TLS  bidirectional transmission, frame upper limit, and compatibility with previous JSON  peer. TCP  is the WebSocket  transmission and QUIC  is not implemented.
 
-`FileTransfer`는 libcurl 기반 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP/SCP, TFTP, Gopher(s), 로컬 파일을 전송한다. `StorageBridge`는 rclone에 구성된 NAS·클라우드·가상 저장소 전체에 공통 파일 작업을 제공한다. `FileProtocolServer`는 HTTP(S), WebDAV(S), FTP/FTPS/FTPES, SFTP, S3, NFSv3, restic 서버를 관리한다. 바이너리 스트리밍, 다운로드의 원자적 교체·SHA-256, 작업 취소, 자격 증명 분리와 실제 엔진 기능 조회를 포함한다. 기존 Peer·LanPeer API는 유지한다.
+<a id="050-표준-파일-전송nas클라우드서버-호스팅"></a>
 
-[지원 행렬, C++ API, 명령줄 실행, 의존성 및 검증](docs/FileTransfer.md)을 참고한다. 지원 기능은 실제 libcurl/rclone 빌드와 각 백엔드에 따르며, 모든 서비스의 모든 기능을 보장하는 의미가 아니다.
+## 0.5.0: Standard file transfer · NAS · Cloud · Server hosting
 
-## 0.4.1: 탐색한 기기의 직접 LAN 페어링
+`FileTransfer`  transmits based on libcurl-based HTTP (S), WebDAV(S) , FTP / FTPS / FTPES , SFTP / SCP , TFTP , Gopher(s), and local files. `StorageBridge`  provides common file operations across NAS · Cloud · Virtual storage configured in rclone. `FileProtocolServer`  manages HTTP (S), WebDAV(S) , FTP / FTPS / FTPES , SFTP , S3 , NFSv3, and restic servers. It includes binary streaming, atomic replacement of downloads · SHA-256 , job cancellation, credential separation, and actual engine feature lookup. Existing Peer · LanPeer  API is maintained.
 
-`createDeviceOffer(peerId)`는 탐색으로 선택한 기기에 묶인 일회용 연결 정보를 만든다. `join()` 이후 양쪽의 `phase()`는 `confirming`이 되고 `verificationCode()`에 같은 12자리 hex 코드(4-4-4 형식)를 표시한다. 호스트가 `confirmDevice()`를 호출하기 전에는 Files 목록이나 바이트를 반환하지 않는다. 코드는 호스트 TLS 인증서 지문·일회용 키·클라이언트 무작위 nonce·기기 ID의 SHA-256에 바인딩된다. 다른 기기 ID, 중복 연결, 만료·취소된 요청은 거부한다. 확인 대기는 최대 60초이다. `pairedDeviceIds()`는 호스트·클라이언트 모두에서 현재 연결 완료된 기기를 제공하므로 목록에 연결 상태를 표시할 수 있다. 탐색 정보는 신뢰 증명이 아니므로 소비 UI가 양쪽 코드를 비교한 뒤 호스트의 명시적 연결 확인을 받아야 한다.
+[support matrix, C++   API , command-line execution, and dependencies and validation](docs/FileTransfer.md)are referenced. Supported features depend on the actual libcurl/rclone build and each backend, and it does not mean guaranteeing all features of all services.
 
-SDK는 Bonjour/NSD나 계정 로그인을 소유하지 않는다. Society 앱이 계정 범위의 기기 탐색·선택·초대 수신을 담당하고, SDK는 기존 TLS·Files 연결을 재사용한다. `iiServerHost.lan`은 선택 기기 바인딩, 최종 확인 전 Files 핸들러 호출 금지, 코드 일치, 확인·취소를 검사한다. 로그인 테스트는 호출하지 않는다.
+<a id="041-탐색한-기기의-직접-lan-페어링"></a>
 
-## 직접 LAN QR 페어링
+## 0.4.1: direct LAN pairing of the scanned device
 
-`LanPeer`는 외부 중계·계정 서버 없이 데스크탑과 모바일을 직접 연결한다. 데스크탑의 `startHost()`와 `createOffer()`가 사설 IPv4 주소·TLS 인증서 SHA-256·256비트 일회용 키·60초 만료를 담은 `LanLink` 버전 2 QR을 생성한다. 모바일은 `join(qr, deviceId, name)`으로 접속한다. QR 인증서 지문 확인 이전에는 응용 데이터를 전송하지 않으며, 로그인 쿠키나 계정 모델을 받지 않는다. QR 스캔 자체가 호스트의 접근 승인이다.
+`createDeviceOffer(peerId)` creates one-time connection information bound to the device selected through discovery. After `join()`, `phase()` on both sides becomes `confirming`, and `verificationCode()` displays the same 12-digit hex code in 4-4-4 format. No Files list or bytes are returned before the host calls `confirmDevice()`. The code is bound to the SHA-256 of the host's TLS certificate fingerprint, one-time key, client random nonce, and device ID. Another device ID, duplicate connections, and expired or canceled requests are rejected. Confirmation waits for at most 60 seconds. `pairedDeviceIds()` provides currently connected devices on both host and client, allowing connection state to appear in the list. Discovery information is not proof of trust; the consumer UI must compare the codes on both sides and receive explicit connection confirmation from the host.
 
-Files 목록 확인과 클라이언트 confirm을 완료한 뒤 양쪽에 `paired`를 보내고 `request()`를 허용한다. 취소·만료·재사용·다른 지문은 거부한다. 연결 키는 메모리에만 보관하며 접속 중단 후에는 새 QR로 재연결한다. 이미 완료된 연결은 `cancelPairing()`으로 종료하지 않는다. `stop()`은 리스너·연결·미완료 요청을 모두 닫는다. SDK의 기존 RelayServer/Peer 및 버전 1 PairingLink는 네이티브 소비자 호환 API로 유지된다.
+The SDK does not own Bonjour/NSD or account login. The Society app is responsible for device discovery, selection, and invitation reception within the account scope, and the SDK reuses existing TLS ·Files connections. `iiServerHost.lan` checks for selected device binding, prohibits calling the Files handler before final confirmation, checks for code match, and inspects confirmation and cancellation. Login tests are not called.
 
-호스트는 데스크탑에서만 빌드한다. iOS/Android는 `startHost()`를 거부하고 클라이언트만 포함한다. Qt 6.8.3 Core/Network/WebSockets를 재사용하며 데스크탑은 OpenSSL 3 Crypto로 RSA-2048 임시 인증서를 생성한다. OpenSSL은 Apache 2.0이며 `ThirdParty/OpenSSL-LICENSE.txt`와 설치의 `share/iiServerHost/licenses/`에 고지를 제공한다. Qt Secure Transport의 호스팅 호환성을 확인한 RSA 키 형식을 사용한다. 개인 키를 파일이나 키체인에 장기 저장하지 않는다. [OpenSSL keygen](https://docs.openssl.org/3.5/man3/EVP_PKEY_keygen/), [X509_sign](https://docs.openssl.org/3.5/man3/X509_sign/), [QWebSocket TLS](https://doc.qt.io/qt-6.8/qwebsocket.html)를 따른다.
+<a id="직접-lan-qr-페어링"></a>
 
-QR 주소는 RFC 1918 IPv4와 명시적인 테스트 loopback만 허용한다. 자동 검색은 Wi-Fi/Ethernet을 우선하고 공인 주소·DNS·link-local metadata·VPN point-to-point 인터페이스를 제외한다. 최대 8개 주소를 순서대로 시도하며 인터넷 fallback은 없다. IPv6 전용 LAN은 지원하지 않는다. 호스트는 TLS와 1 MiB 메시지/4 MiB 송신 대기열, 8개 연결 제한을 적용하며 클라이언트는 동시 요청을 32개로 제한한다.
+## Directly LAN QR pairing
 
-`iiServerHost.lan`은 로그인이나 SessionAuthenticator를 호출하지 않고 실제 TLS 페어링·파일 바이트·만료·취소·재사용·지문 불일치를 검증한다. 설치 소비자에도 같은 검사를 적용한다.
+`LanPeer` connects desktop and mobile directly without an external relay or account server. The desktop's `startHost()` and `createOffer()` generate a version-2 `LanLink` QR containing a private IPv4 address, TLS certificate SHA-256, a 256-bit one-time key, and a 60-second expiry. Mobile connects through `join(qr, deviceId, name)`. No application data is sent before the QR certificate fingerprint is verified, and no login cookies or account models are received. Scanning the QR itself constitutes the host's access authorization.
+
+After checking the Files list and completing the client confirm, send `paired` to both sides and allow `request()`. Cancel, expire, reuse, and other fingerprints are rejected. The connection key is stored in memory only and reconnected with a new QR after disconnection. Completed connections are not terminated via `cancelPairing()`. `stop()` closes the listener, connection, and pending requests. The SDK's existing RelayServer /Peer and version 1 PairingLink are maintained as native consumer compatible APIs.
+
+The host is built only on desktop platforms. iOS/Android reject `startHost()` and include only the client. It reuses Qt 6.8.3 Core/Network/WebSockets, and desktop platforms use OpenSSL 3 Crypto to generate temporary RSA-2048 certificates. OpenSSL is Apache 2.0, and notices are provided in `ThirdParty/OpenSSL-LICENSE.txt` and the installed `share/iiServerHost/licenses/`. It uses the RSA key format whose hosting compatibility with Qt Secure Transport has been verified. Private keys are not stored long-term in files or the keychain. It follows [OpenSSL keygen](https://docs.openssl.org/3.5/man3/EVP_PKEY_keygen/), [X509_sign](https://docs.openssl.org/3.5/man3/X509_sign/), and [QWebSocket TLS](https://doc.qt.io/qt-6.8/qwebsocket.html).
+
+QR addresses permit only RFC 1918 IPv4 and explicitly specified test loopback. Automatic discovery prioritizes Wi-Fi/Ethernet and excludes public addresses, DNS, link-local metadata, and VPN point-to-point interfaces. It attempts at most 8 addresses in order, with no internet fallback. IPv6-only LANs are unsupported. The host applies TLS, a 1 MiB message limit, a4 MiB outbound-queue limit, and a limit of 8 connections. The client limits concurrent requests to 32.
+
+`iiServerHost.lan` validates actual TLS pairing, file bytes, expiration, cancel, reuse, and fingerprint mismatch without calling login or SessionAuthenticator. The same check is applied to install consumers as well.
 
 
-C++20 / Qt 6.8.3 기반의 로컬·원격 앱 호스팅 SDK, 버전 0.5.0이다. 소비 앱은 `Peer` 하나로 자신의 파일을 제공하면서 같은 계정의 다른 호스트에 접근한다. 가까운 기기는 로컬 TLS 연결을 먼저 사용하고, 해당 주소에 연결할 수 없으면 원격 WebSocket 중계로 전환한다. 양쪽 기기가 중계에 외향 연결하므로 공유기의 포트 포워딩은 필요하지 않다.
+A local and remote app-hosting SDK based on C++20 / Qt 6.8.3, version 0.5.0. A consumer app uses a single `Peer` to provide its own files while accessing other hosts under the same account. Nearby devices first use a local TLS connection, switching to a remote WebSocket relay if the address cannot be reached. Both devices connect outbound to the relay, so router port forwarding is unnecessary.
 
-## 구성과 신뢰 경계
+<a id="구성과-신뢰-경계"></a>
 
-- `RelayServer`: 인증된 계정·서비스별 기기 목록, 일회용 로컬 접속표, 요청 중계이다. 파일을 저장하지 않는다. 서로 다른 계정의 목록과 요청을 격리한다.
-- `SessionAuthenticator`: 고정한 HTTPS `/Account/GraphQL`에 쿠키를 보내 검증된 `account.sub`를 읽는다. `accountId` 표시 문자열이나 클라이언트가 선언한 계정은 권한 증명이 아니다. 응답 쿠키·캐시·리디렉션은 사용하지 않는다.
-- `Peer`: 호스트 등록, 기기 검색, 로컬 우선 전송, 원격 전환, 지수형 재접속, 요청 시간 제한을 담당한다. 같은 `service`의 호스트만 표시한다.
-- `FileShare`: 루트 아래 목록·메타데이터·분할 읽기·새 파일 생성·디렉터리 생성이다. 애플리케이션은 `RequestHandler`로 다른 저장소를 연결할 수 있다. iiServerHost가 Society를 참조하지 않는다.
+## Composition and trust boundary
 
-인증 쿠키는 신뢰하는 중계와 계정 검증 서버에만 전달된다. 다른 기기에는 256비트 무작위 일회용 접속표를 전달한다. 기기의 로컬 인증서 SHA-256은 인증된 중계 목록에서 얻고 실제 TLS 인증서와 대조한다. 인증서 오류를 무조건 무시하지 않는다. 중계는 기본 신뢰 CA로 인증한다. 비 TLS URL과 리스너는 숫자형 loopback 주소에서만 허용한다.
+- `RelayServer`: List of devices per authenticated account and service, one-time local access token, and request relay. It does not store files. It isolates lists and requests from different accounts.
+- `SessionAuthenticator`: Sends a cookie to the fixed HTTPS `/Account/GraphQL` and reads the verified `account.sub`. The `accountId` display string or a client-declared account is not authorization proof. It does not use response cookies, cache, or redirects.
+- `Peer`: Handles host registration, device search, local-priority transfer, remote switch, exponential reconnection, and request timeout. It displays only hosts of the same `service`.
+- `FileShare`: Includes list, metadata, chunked read, new file creation, and directory creation under root. The application can connect to other storage via `RequestHandler`. iiServerHost does not reference Society.
 
-계정 확인은 30초마다 갱신하며 권한 수명은 최대 60초이다. 갱신 실패·만료·로그아웃·연결 종료 시 접근을 해제한다. 로컬 접속표는 한 번 소비하고 해당 연결도 만료 시 종료한다. LAN 파일 전송에도 **기기 검색과 계정 확인을 위한 중계 연결은 필요하다**. QR 페어링으로 같은 계정의 호스트를 선택할 수 있지만, 페어링이 계정 인증을 대체하거나 오프라인 접근 권한을 부여하지 않는다.
+Authentication cookies are delivered only to trusted relays and account verification servers. Other devices receive 256-bit random one-time access tokens. Device local certificates SHA-256 are obtained from the trusted relay list and compared against the actual TLS certificate. Certificate errors are never ignored unconditionally. Relays authenticate using the default trusted CA. Non-TLS URLs and listeners are allowed only on numeric loopback addresses.
 
-## 소비 앱 API
+Account verification is refreshed every 30 seconds, and the permission lifetime is a maximum of 60 seconds. Access is revoked upon refresh failure, expiration, logout, or connection termination. Local access tokens are consumed one time times and the corresponding connection is terminated upon expiration. LAN file transfers also require **device discovery and account verification relay connections**. QR pairing allows selecting hosts of the same account, but pairing does not replace account authentication or grant offline access permissions.
+
+<a id="소비-앱-api"></a>
+
+## Consumer app API
 
 ```cpp
 #include <iiServerHost.h>
@@ -53,7 +65,7 @@ iiServerHost::FileShare files("/absolute/path/to/shared/Files");
 iiServerHost::Peer peer;
 iiServerHost::PeerOptions options;
 options.relayUrl = QUrl("wss://your-relay.example/server-host");
-options.credential = authenticatedCookieHeader; // 화면에 표시하거나 디스크에 저장하지 않는다.
+options.credential = authenticatedCookieHeader; // Do not display this on screen or store it on disk.
 options.peerId = stableDeviceId;
 options.name = "My desktop";
 options.service = "com.example.files";
@@ -62,51 +74,57 @@ peer.start(options, [&files](const QString &, const QJsonObject &request) {
     return files.handle(request);
 });
 QObject::connect(&peer, &iiServerHost::Peer::completed,
-    [](QString id, QJsonObject result, QString transport) { /* 결과 처리 */ });
+    [](QString id, QJsonObject result, QString transport) { /* Handle the result */ });
 const QString id = peer.request(otherDeviceId, {{"op", "list"}, {"path", ""}});
 ```
 
-`PeerOptions.localEnabled=false`는 원격 전용이다. `localHostingEnabled=false`는 로컬 리스너만 비활성화하고 다른 기기에 대한 로컬 우선 접근을 유지한다. `hostFiles=false`는 검색·접근만 하는 클라이언트이다. 로컬 주소를 지정하지 않으면 활성 IPv4 인터페이스를 등록하고 같은 서브넷 주소만 시도한다. `localTimeoutMs` 기본값은 주소별 1.2초, 전체 요청 제한은 15초이다. IPv6 주소를 명시하는 API는 있지만 자동 광고는 IPv4이다.
+`PeerOptions.localEnabled=false` is remote-only. `localHostingEnabled=false` disables only the local listener while retaining local-first access to other devices. `hostFiles=false` is a client that performs discovery and access only. If no local address is specified, active IPv4 interfaces are registered, and only addresses in the same subnet are attempted. `localTimeoutMs` defaults to 1.2 seconds per address; the overall request limit is 15 seconds. An API can explicitly specify an IPv6 address, but automatic advertisement uses IPv4.
 
-핸들러와 신호는 소유 Qt 스레드에서 실행한다. 큰 작업은 애플리케이션의 비동기 저장소 계층으로 분리해야 한다. 이미 전송한 요청은 경로 전환으로 재실행하지 않는다. 쓰기 응답이 끊기면 호출자는 목록으로 결과를 확인해야 한다.
+Handlers and signals are executed in the owning Qt thread. Large tasks must be separated into the application's asynchronous storage layer. Requests already sent are not re-executed via path switching. If a write response breaks, the caller must check the results as a list.
 
-## QR 페어링
+<a id="qr-페어링"></a>
 
-QR의 중계 URL은 중첩 인코딩하므로 경로의 `%2F`·`%25` 같은 이스케이프가 변하지 않는다. 이 경우도 생성·파싱 회귀 테스트로 확인한다.
+## QR pairing
 
-`PairingLink`는 `society://pair?v=1&relay=...&host=...&code=...`의 생성·엄격한 파싱을 담당한다. 버전·필드 중복·호스트 ID·256비트 코드·중계의 TLS URL을 검사하며 네트워크 요청은 하지 않는다. 소비 앱은 코드에 들어 있는 relay를 독립적인 신뢰 설정과 대조해야 한다. 파싱 성공만으로 그 서버에 계정 쿠키를 보내면 안 된다.
+Since the relay URL in QR is nested-encoded, escapes such as `%2F` · `%25` remain unchanged. This case is also verified via creation and parsing regression tests.
 
-| Peer API | 역할 |
+`PairingLink` is responsible for the creation and strict parsing of `society://pair?v=1&relay=...&host=...&code=...`. It checks version, field duplication, host ID, 256-bit code, and the relay's TLS URL, and does not make network requests. The consumer app must compare the relay contained in the code against independent trusted settings. Sending the account cookie to that server solely based on parsing success is not allowed.
+
+| Peer API |Role|
 | --- | --- |
-| `createPairingOffer()` | 연결된 호스트가 일회성 코드를 발급한다. 반환한 요청 ID로 이벤트를 구분한다. |
-| `claimPairingOffer(code, expectedHost)` | 연결된 클라이언트가 QR의 코드와 호스트 ID를 제출한다. |
-| `confirmPairing(pairingId)` | 클라이언트가 실제 호스트 접근 검사 후 연결 완료를 확인한다. |
-| `cancelPairing(requestId)` | 자기 요청을 취소한다. 이미 소모한 QR은 복구되지 않는다. |
-| `pairingEvent(QJsonObject)` | `id`, `status`와 단계별 데이터를 받는다. |
+| `createPairingOffer()` |The connected host issues a one-time code. Events are distinguished by the returned request ID.|
+| `claimPairingOffer(code, expectedHost)` |The connected client submits the QR code and host ID.|
+| `confirmPairing(pairingId)` |The client confirms connection completion after actual host access verification.|
+| `cancelPairing(requestId)` |Cancel its own request. Already consumed QR codes cannot be recovered.|
+| `pairingEvent(QJsonObject)` |Receives `id`, `status`, and data for each stage.|
 
-wire 요청은 `pair-offer`, `pair-claim`, `pair-confirm`, `pair-cancel`이며 응답은 `type: pairing`이다. 상태는 `offered`, `claimed`, `paired`, `error`, `cancelled`, `expired`이다. `offered`는 `code`, `peerId`, `name`, 문자열 epoch-millisecond `expires`를 포함한다. `claimed`는 `pairingId`, 상대 `peerId`·`name`, `expires`를 양쪽에 전달한다. 그 클라이언트의 confirm을 받은 경우에만 양쪽에 `paired`를 전달한다. SDK 서버 자체가 파일 목록 검사의 의미를 판단하지 않으며, Society의 `DevicePairing`이 성공한 Files 목록 응답을 받은 뒤 confirm을 보낸다.
+Wire requests are `pair-offer`, `pair-claim`, `pair-confirm`, and `pair-cancel`, and the response is `type: pairing`. Status is `offered`, `claimed`, `paired`, `error`, `cancelled`, and `expired`. `offered` includes `code`, `peerId`, `name`, and string epoch-millisecond `expires`. `claimed` passes `pairingId`, relative `peerId` · `name`, and `expires` to both sides. The `paired` is delivered to both sides only if that client's confirm is received. SDK The server itself does not determine the meaning of file list inspection, and after receiving the Files list response where `DevicePairing` succeeded, it sends a confirm.
 
-코드는 OS 무작위 생성기로 만든 32바이트를 hex로 표현한다. 서버 메모리에는 코드의 SHA-256만 보관하며, 수명은 최대 60초와 발급 당시 호스트 인증의 남은 수명 중 짧은 값이다. claim 때 즉시 소모하고 확인 대기는 최대 15초이며 QR 만료를 넘기지 않는다. 같은 계정·같은 서비스의 등록된 호스트와 클라이언트만 연결된다. 다른 계정·다른 호스트 ID·재사용은 동일한 오류로 거부한다. 연결 종료·인증 실패·호스트 해제·재발급·취소·만료 시 해당 대기 상태를 폐기한다. 세션별 발급·claim 시도는 30초당 6회로 제한한다. 서버는 영구 기기 관계나 계정 쿠키를 디스크에 저장하지 않는다.
+The code is a hex representation of 32 bytes generated by the OS random generator. Server memory stores only the code's SHA-256. Its lifetime is the shorter of 60 seconds and the host authentication's remaining lifetime when issued. It is consumed immediately on claim. Confirmation waits at most 15 seconds and never beyond the QR expiry. Only registered hosts and clients for the same account and service connect. Another account, another host ID, and reuse are rejected with the same error. Connection closure, authentication failure, host unregistration, reissuance, cancellation, or expiry discards the corresponding pending state. Issuance and claim attempts are limited per session to 6 per 30 seconds. The server does not store persistent device relationships or account cookies on disk.
 
-`iiServerHost.pairing`은 엄격한 QR 파싱, 계정 격리, 호스트 일치, 일회성 사용, 다른 클라이언트의 confirm 차단, 재발급·취소·연결 종료, 만료·시도 제한을 실제 WebSocket으로 검사한다. 설치 소비자도 같은 페어링 검사를 실행한다. 기존 파일·로컬/원격 전송 API와 `helloWorld()`는 유지한다.
+`iiServerHost.pairing` strictly checks QR parsing, account isolation, host matching, one-time use, blocking another client's confirm, reissuance, cancellation, connection termination, expiration, and attempt limits as actual WebSocket. The install consumer also performs the same pairing check. Existing files, local/remote transfer APIs, and `helloWorld()` are maintained.
 
-## 파일 계약
+<a id="파일-계약"></a>
 
-| op | 요청 필드 | 응답 |
+## File Contract
+
+| op |Request Fields|Response|
 | --- | --- | --- |
-| `list` | `path`, 선택적 문자열 `cursor` | 최대 256개 `entries`, `nextCursor` |
-| `stat` | `path` | 문자열 `size`, 불투명 `version` |
-| `read` | `path`, 문자열 `offset`, 선택적 `version` | 최대 256 KiB의 base64 `data`, `size`, `offset`, `version`, `eof` |
-| `write` | `path`, base64 `data` | 새 파일만 원자적으로 생성, 최대 256 KiB, 기존 파일은 보존 |
-| `mkdir` | `path` | 기존 부모 아래 새 디렉터리 |
+| `list` |`path`, optional string `cursor`|Maximum 256 `entries`, `nextCursor`|
+| `stat` | `path` |String `size`, opaque `version`|
+| `read` |`path`, string `offset`, optional `version`|Maximum 256 KiB base64 `data`, `size`, `offset`, `version`, `eof`|
+| `write` | `path`, base64 `data` |Atomically create new files only, maximum 256 KiB, preserve existing files|
+| `mkdir` | `path` |New directory under existing parent|
 
-정수 크기·오프셋은 JSON 부동소수점 손실을 피하기 위해 문자열로 전달한다. 다운로드는 먼저 `stat`, 이어 같은 `version`으로 모든 청크를 받아야 한다. 변경된 파일은 `file_changed`로 실패한다. 디렉터리 페이지 커서는 해당 디렉터리가 변경되면 새로 시작해야 한다. 삭제·덮어쓰기·대용량 업로드·동기화 충돌 해결·OS 마운트는 이 API에 포함되지 않는다.
+Integer size and offset are passed as strings to avoid JSON floating-point loss. Downloads must first receive `stat`, then all chunks with the same `version`. Modified files fail with `file_changed`. Directory page cursors must restart when the directory changes. Delete, overwrite, large upload, synchronization conflict resolution, and OS mount are not included in this API.
 
-Unix 파일 제공은 `openat`, `O_NOFOLLOW`, 디렉터리 FD 및 inode/device 검사를 사용한다. 심볼릭 링크, 부모 경로 이동, 리다이렉션, 교체된 루트를 거부한다. 새 파일은 같은 디렉터리의 임시 파일을 완성한 뒤 `linkat`으로 게시하므로 기존 파일을 덮어쓰지 않는다. root guard로 Society UUID 등 애플리케이션 계약도 검사한다. Windows에서는 기본 `FileShare`가 안전한 네이티브 핸들 구현 전까지 요청을 거부한다. 전송·중계 계층과 사용자 정의 핸들러는 Qt 기반으로 분리되어 있다.
+Unix file provision uses `openat`, `O_NOFOLLOW`, directory FD, and inode/device checks. Rejects symbolic links, parent path moves, redirections, and replaced roots. New files are published via `linkat` after completing a temporary file in the same directory, so they do not overwrite existing files. Applications also check contracts such as root guard Society UUID. On Windows, requests are rejected until a safe native handle implementation is available by default `FileShare`. Transfer and relay layers and custom handlers are separated based on Qt.
 
-메시지 1 MiB, 송신 대기열 4 MiB, 연결 128개, 기기당 동시 요청 32개, 중계 요청 총 1024개, 로컬 연결 64개로 제한한다. 중계 운영자는 파일 트래픽을 볼 수 있다. 중계까지 각 연결은 TLS지만 종단 간 암호화 저장소는 아니다. 중계에 계정 쿠키나 파일 데이터를 로깅하지 않는다.
+Message 1 MiB, send queue 4 MiB, 128 connections, concurrent requests per device 32, total relay requests 1024, limited to 64 local connections. Relay operators can view file traffic. Each connection to the relay is TLS, but the end-to-end encryption store is not. No account cookies or file data are logged to the relay.
 
-## 중계 실행
+<a id="중계-실행"></a>
+
+## Run relay
 
 ```sh
 build/ii-server-relay --address 0.0.0.0 --port 9443 \
@@ -114,9 +132,11 @@ build/ii-server-relay --address 0.0.0.0 --port 9443 \
   --session-url https://iisacc.com/Account/GraphQL
 ```
 
-기존 HTTPS reverse proxy를 사용할 때는 중계를 `127.0.0.1:9443`에 바인딩하고 외부에 WSS만 제공한다. proxy는 WebSocket upgrade를 지원하고 연결 수명은 60초보다 길어야 한다. 소비 앱은 공용 중계 URL을 설정해야 한다. 이 저장소의 구현·loopback 검증은 공용 서버 배포나 다른 물리 네트워크에서의 실행 증거가 아니다. 새로운 유료 인프라를 생성하지 않는다.
+When using an existing HTTPS reverse proxy, bind the relay to `127.0.0.1:9443` and expose only WSS externally. The proxy supports WebSocket upgrade and connection lifetime must be longer than 60 seconds. Consumer apps must set the public relay URL. Implementation and loopback verification in this repository are not evidence of deployment on public servers or execution in other physical networks. Do not create new paid infrastructure.
 
-## 빌드·설치
+<a id="빌드설치"></a>
+
+## Build and Install
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
@@ -131,32 +151,34 @@ cmake --build build/consumer/build --parallel 4
 ctest --test-dir build/consumer/build --output-on-failure
 ```
 
-`INSTALL_PREFIX=... ./install.sh`도 같은 검증을 실행한다. 설치 타깃은 `iiServerHost::iiServerHost`, 공개 헤더는 `src/iiServerHost.h`, `src/ServerHost.h`, `src/PairingLink.h`, `src/iiServerHostExport.h`이다. 헤더 간 순환 참조를 두지 않는다. iOS에는 `BUILD_SHARED_LIBS=OFF`, `BUILD_TESTING=OFF`를 사용한다. 기존 `helloWorld()` ABI는 유지한다. 모든 빌드 산출물은 `build/` 아래에 둔다.
+It runs the same verification as `INSTALL_PREFIX=... ./install.sh`. The install target is `iiServerHost::iiServerHost`, the public headers are `src/iiServerHost.h`, `src/ServerHost.h`, `src/PairingLink.h`, and `src/iiServerHostExport.h`. It does not create circular references between headers. It uses iOS and `BUILD_SHARED_LIBS=OFF` in `BUILD_TESTING=OFF`. It maintains the existing `helloWorld()` ABI. All build artifacts are placed under `build/`.
 
-## 의존성 검토
+<a id="의존성-검토"></a>
 
-기존 Qt 6.8.3 Core에 Network와 WebSockets만 추가했다. 유지보수되는 Qt 네트워크·TLS·WebSocket 구현을 사용하며 자체 암호화나 HTTP 파서를 만들지 않는다. Qt HTTP Server, WebRTC, 별도 유료 터널·VPN 의존성을 추가하지 않는다. Qt WebSockets의 공식 사용 조건은 상용 또는 LGPLv3/GPLv2이다. 실제 배포는 선택한 Qt 라이선스와 TLS 백엔드의 고지를 유지한다. OpenSSL 명령행은 테스트 인증서 생성용이며 SDK 직접 링크 의존성은 아니다.
+## Dependency Review
 
-macOS Secure Transport가 로그인 키체인에 서버 키를 넣지 않도록, 리스너는 미설정된 `QT_SSL_USE_TEMPORARY_KEYCHAIN`을 `1`로 초기화한다. 애플리케이션이 명시적으로 설정한 값은 보존한다.
+Only Network and WebSockets were added to the existing Qt 6.8.3 Core. Maintained Qt network, TLS, and WebSocket implementations are used; no custom cryptography or HTTP parser is created. No Qt HTTP Server, WebRTC, separate paid tunnel, or VPN dependency is added. The official terms for Qt WebSockets are commercial or LGPLv3/GPLv2. Actual distribution retains the notices for the selected Qt license and TLS backend. The OpenSSL command line is used to create test certificates and is not a directly linked SDK dependency.
 
-근거: [Qt WebSockets](https://doc.qt.io/qt-6.8/qtwebsockets-index.html), [QWebSocket 메시지 제한](https://doc.qt.io/qt-6.8/qwebsocket.html), [QSslSocket 키체인·신뢰 설정](https://doc.qt.io/qt-6.8/qsslsocket.html).
+The listener initializes `QT_SSL_USE_TEMPORARY_KEYCHAIN` to `1` so that macOS Secure Transport does not put the server key in the login keychain. It preserves values explicitly set by the application.
 
-## 라이선스
+References: [Qt WebSockets](https://doc.qt.io/qt-6.8/qtwebsockets-index.html), [QWebSocket message limits](https://doc.qt.io/qt-6.8/qwebsocket.html), and [QSslSocket keychain/trust settings](https://doc.qt.io/qt-6.8/qsslsocket.html).
 
-SPDX-License-Identifier: AGPL-3.0-only. 자체 코드는 [LICENSE](LICENSE)를 따른다. Qt 등 외부 라이브러리의 별도 라이선스를 대체하지 않는다.
+<a id="라이선스"></a>
 
-`ii-server-host`는 소비 앱 없이도 같은 SDK를 사용하는 진단용 실행 파일이다. `--root`, `--relay`, `--id`, `--credential-file`로 호스팅하고, `--peer ID --path relative/path --read`로 한 청크를 읽거나 `--read` 없이 목록을 읽는다. 공개 LAN 리스너에는 `--certificate`와 `--key`를 함께 전달한다. `--no-local`로 원격 경로를 강제할 수 있다. 자격증명 파일은 소유자만 읽을 수 있게 두고 버전 관리에 포함하지 않는다. `iiServerHost.process_hosting`은 HTTP 인증 검증 서버와 중계·호스트·클라이언트의 별도 프로세스를 통해 양쪽 경로에서 실제 파일 바이트를 확인한다.
+## License
+
+SPDX -License-Identifier: AGPL-3.0 -only. Its own code follows [LICENSE](LICENSE). It does not replace the separate licenses of external libraries such as Qt.
+
+`ii-server-host` is a diagnostic executable that uses the same SDK even without a consumer app. It hosts `--root`, `--relay`, `--id`, and `--credential-file`, reads a chunk via `--peer ID --path relative/path --read`, or reads the list without `--read`. It passes LAN and `--certificate` together to the public `--key` listener. It can force a remote path via `--no-local`. The credential file is set to be readable only by the owner and is not included in version control. `iiServerHost.process_hosting` verifies the actual file bytes from both paths via the HTTP authentication verification server and separate relay, host, and client processes.
 
 ## Source layout
 
 Implementation files and their headers live together under `src/`. Existing feature and platform subdirectories retain their responsibilities. Build configuration, tests, documentation, resources, and maintenance scripts remain at the project root. Configure and build using the repository-local `build/` directory.
 
-## 계정 GraphQL 인증
+<a id="계정-graphql-인증"></a>
 
-`SessionAuthenticator`와 `--session-url`은 GraphQL endpoint를 받는다. 기본값은
-`https://iisacc.com/Account/GraphQL`이다. `POST` 본문은
-`{"query":"query AccountSession { accountSession { account { sub } } }"}`이며
-`data.accountSession.account.sub`만 인증 주체로 읽는다. 오류가 있는 부분 응답, null 계정,
-잘못된 Content-Type, 리디렉션은 인증하지 않는다. 릴레이와 서버 endpoint를 함께 갱신한다.
+## Account GraphQL Authentication
+
+`SessionAuthenticator` and `--session-url` receive the GraphQL endpoint. The default is `https://iisacc.com/Account/GraphQL`. The `POST` body is `{"query":"query AccountSession { accountSession { account { sub } } }"}` and only reads `data.accountSession.account.sub` as the authentication subject. It does not authenticate partial responses with errors, null accounts, incorrect Content-Type, or redirects. It updates the relay and server endpoint together.
 
 LAN applications can require mutual account proofs with `setPairingAuthentication`. Proofs bind both peer IDs, pinned certificate, one-use offer and client nonce with separate client/host roles. Authentication precedes Files access. Legacy clients fail closed when callbacks are installed.
