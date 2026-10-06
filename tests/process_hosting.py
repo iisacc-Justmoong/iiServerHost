@@ -4,7 +4,7 @@ from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-import selectors
+import queue
 import subprocess
 import sys
 import tempfile
@@ -41,11 +41,14 @@ def stop(process):
 
 
 def line(process):
-    with selectors.DefaultSelector() as selector:
-        selector.register(process.stdout, selectors.EVENT_READ)
-        if not selector.select(10):
-            raise AssertionError('Process did not become ready')
-        return process.stdout.readline().strip()
+    ready = queue.Queue()
+    threading.Thread(target=lambda: ready.put(process.stdout.readline()), daemon=True).start()
+    try:
+        value = ready.get(timeout=10)
+    except queue.Empty as error:
+        raise AssertionError('Process did not become ready') from error
+    assert value, 'Process exited before reporting readiness'
+    return value.strip()
 
 
 with tempfile.TemporaryDirectory(dir=build, prefix='process-hosting-') as directory, ExitStack() as cleanup:

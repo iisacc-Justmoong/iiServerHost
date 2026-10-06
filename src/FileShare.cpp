@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryFile>
+#include "WindowsFileShare.h"
 #ifdef Q_OS_UNIX
 #include <dirent.h>
 #include <fcntl.h>
@@ -57,6 +58,12 @@ FileShare::FileShare(QString root, std::function<bool()> guard) : m_guard(std::m
 #ifdef Q_OS_UNIX
     struct stat s{};
     if (!m_root.isEmpty() && ::lstat(QFile::encodeName(m_root).constData(), &s) == 0) { m_device = s.st_dev; m_inode = s.st_ino; }
+#elif defined(Q_OS_WIN)
+    const auto rootHandle = windows_files::open(m_root, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true);
+    BY_HANDLE_FILE_INFORMATION nativeInfo{};
+    if (rootHandle && GetFileInformationByHandle(rootHandle->value, &nativeInfo)) {
+        m_device = nativeInfo.dwVolumeSerialNumber; m_inode = windows_files::id(nativeInfo);
+    } else m_root.clear();
 #endif
 }
 QString FileShare::resolve(const QString &path, bool allowMissing) const {
@@ -135,6 +142,8 @@ QJsonObject FileShare::handle(const QJsonObject &request) const {
         ::unlinkat(directory.value, temporary.constData(), 0);
         return ok ? QJsonObject{{"ok", true}, {"size", QString::number(written)}} : protocol::error("write_failed_or_exists");
     }
+#elif defined(Q_OS_WIN)
+    return windows_files::handle(m_root, m_device, m_inode, request);
 #else
     // Until native no-follow handles are implemented, fail closed on platforms
     // where Qt alone cannot guarantee confinement during a concurrent rename.

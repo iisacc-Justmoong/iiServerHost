@@ -150,6 +150,11 @@ private slots:
         QVERIFY(share.handle({{"op", "write"}, {"path", "new.txt"}, {"data", "aGVsbG8="}}).value("ok").toBool());
         QVERIFY(!share.handle({{"op", "write"}, {"path", "new.txt"}, {"data", "Y2hhbmdlZA=="}}).value("ok").toBool());
         QCOMPARE(share.handle({{"op", "read"}, {"path", "new.txt"}}).value("data").toString(), "aGVsbG8=");
+        QVERIFY(share.handle({{"op", "mkdir"}, {"path", QString::fromUtf8("자료")}}).value("ok").toBool());
+        QVERIFY(share.handle({{"op", "write"}, {"path", QString::fromUtf8("자료/내용.txt")}, {"data", "aGVsbG8="}}).value("ok").toBool());
+        QCOMPARE(share.handle({{"op", "read"}, {"path", QString::fromUtf8("자료/내용.txt")}}).value("data").toString(), "aGVsbG8=");
+        const auto listed = share.handle({{"op", "list"}, {"path", QString::fromUtf8("자료")}});
+        QVERIFY(listed.value("ok").toBool()); QCOMPARE(listed.value("entries").toArray().size(), 1);
         bool available = false;
         FileShare guarded(root.path(), [&] { return available; });
         QVERIFY(!guarded.handle({{"op", "list"}}).value("ok").toBool());
