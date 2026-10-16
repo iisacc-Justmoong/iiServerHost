@@ -13,6 +13,7 @@ from OpenSSL import SSL
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import TLS_FTPHandler
 from pyftpdlib.servers import FTPServer
+from provider_fs import ProviderFilesystem
 
 
 def main():
@@ -42,6 +43,7 @@ def main():
     authorizer.add_user(user, password, str(root), perm="elr" if args.read_only else "elradfmwMT")
 
     class ProtectedHandler(TLS_FTPHandler):
+        abstracted_fs = ProviderFilesystem
         tls_control_required = True
         tls_data_required = True
         banner = "iiServerHost TLS FTP"

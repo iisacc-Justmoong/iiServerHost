@@ -1,4 +1,5 @@
 #include <QJsonDocument>
+#include <iiFileProviderPresentation.h>
 #include <iiServerHost.h>
 #include <QFile>
 #include <QJsonArray>
@@ -47,6 +48,27 @@ class HostingTests : public QObject {
     Q_OBJECT
 private slots:
     void initTestCase() { qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1"); }
+    void privatePresentationsDoNotConsumePublicPagination() {
+        QTemporaryDir root(TEST_DIRECTORY "/presentation-share-XXXXXX"); QVERIFY(root.isValid());
+        for (int i = 0; i < 270; ++i) {
+            QFile document(root.filePath(QString(".asset-%1.iisacc-preview").arg(i)));
+            QVERIFY(document.open(QIODevice::WriteOnly)); document.write("private derived fixture");
+        }
+        for (const auto &name : {"public.txt", ".public-hidden"}) {
+            QFile original(root.filePath(name)); QVERIFY(original.open(QIODevice::WriteOnly)); original.write("original");
+        }
+        FileShare share(root.path());
+        const auto listed = share.handle({{"op", "list"}, {"path", ""}});
+        QVERIFY(listed.value("ok").toBool()); QCOMPARE(listed.value("entries").toArray().size(), 2);
+        QVERIFY(listed.value("nextCursor").toString().isEmpty());
+        QVERIFY(!share.handle({{"op", "stat"}, {"path", ".asset-0.iisacc-preview"}}).value("ok").toBool());
+        QVERIFY(!share.handle({{"op", "write"}, {"path", "public.txt.iisacc.json"}, {"data", ""}}).value("ok").toBool());
+        QVERIFY(share.handle({{"op", "stat"}, {"path", "public.txt"}}).value("ok").toBool());
+        QVERIFY(share.handle({{"op", "write"}, {"path", "uploaded.txt"}, {"data", "cHVibGlzaGVk"}}).value("ok").toBool());
+        QVERIFY(iiFileProvider::native::Presentation::waitForIdle(std::chrono::seconds(15)));
+        const auto uploaded = iiFileProvider::native::Presentation::load(std::filesystem::path(root.filePath("uploaded.txt").toStdU16String()));
+        QVERIFY(uploaded); QCOMPARE(uploaded->details.size, std::uint64_t(9));
+    }
     void localFirstAndSameAccountOnly() {
         RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost));
         Peer host, client, stranger;
@@ -155,6 +177,16 @@ private slots:
         QCOMPARE(share.handle({{"op", "read"}, {"path", QString::fromUtf8("자료/내용.txt")}}).value("data").toString(), "aGVsbG8=");
         const auto listed = share.handle({{"op", "list"}, {"path", QString::fromUtf8("자료")}});
         QVERIFY(listed.value("ok").toBool()); QCOMPARE(listed.value("entries").toArray().size(), 1);
+        QFile lease(root.filePath(".iisacc-temporary.lock")); QVERIFY(lease.open(QIODevice::WriteOnly)); lease.close();
+        QFile nestedLease(root.filePath(QString::fromUtf8("자료/.iisacc-temporary.lock"))); QVERIFY(nestedLease.open(QIODevice::WriteOnly)); nestedLease.close();
+        for (const auto &entry : share.handle({{"op", "list"}}).value("entries").toArray())
+            QVERIFY(entry.toObject().value("name") != ".iisacc-temporary.lock");
+        QCOMPARE(share.handle({{"op", "list"}, {"path", QString::fromUtf8("자료")}}).value("entries").toArray().size(), 1);
+        for (const auto &reserved : {QString(".iisacc-temporary.lock"), QString::fromUtf8("자료/.iisacc-temporary.lock")})
+            for (const auto &operation : {"read", "stat", "write", "mkdir", "remove"})
+                QVERIFY(!share.handle({{"op", operation}, {"path", reserved}, {"data", "aGVsbG8="}}).value("ok").toBool());
+        QVERIFY(QFileInfo::exists(lease.fileName()) && QFileInfo(lease.fileName()).size() == 0);
+        QVERIFY(QFileInfo::exists(nestedLease.fileName()) && QFileInfo(nestedLease.fileName()).size() == 0);
         bool available = false;
         FileShare guarded(root.path(), [&] { return available; });
         QVERIFY(!guarded.handle({{"op", "list"}}).value("ok").toBool());

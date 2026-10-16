@@ -3,6 +3,7 @@ import base64
 import asyncio
 import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -214,6 +215,24 @@ with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as t
         finally:
             client.close()
         checks.append("FTPES rejects cleartext login and unprotected data connections")
+        client = ftplib.FTP_TLS(context=context)
+        client.connect("127.0.0.1", port, timeout=10)
+        client.login(username, password)
+        client.prot_p()
+        try:
+            client.mkd("provider-files")
+            client.storbinary("STOR provider-files/original.bin", io.BytesIO(b"first"))
+            client.storbinary("APPE provider-files/original.bin", io.BytesIO(b"-append"))
+            client.rename("provider-files/original.bin", "provider-files/renamed.bin")
+            received = bytearray()
+            client.retrbinary("RETR provider-files/renamed.bin", received.extend)
+            assert received == b"first-append"
+            client.storbinary("STOU provider-files/unique", io.BytesIO(b"exclusive"))
+            entries = list((root / "provider-files").iterdir())
+            assert len(entries) == 2 and any(path.read_bytes() == b"exclusive" for path in entries)
+        finally:
+            client.close()
+        checks.append("Provider FTP filesystem handles MKD, STOR, APPE, rename and exclusive STOU")
 
     # Derive the expected SSH host key from our own test key, not from an untrusted network scan.
     ssh_public = subprocess.check_output(["ssh-keygen", "-y", "-f", str(build_dir / "test-key.pem")], text=True).strip()

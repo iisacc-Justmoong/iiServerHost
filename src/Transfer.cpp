@@ -1,11 +1,10 @@
+#include <iiFileProviderDevice.h>
 #include "Transfer.h"
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QElapsedTimer>
-#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QRegularExpression>
-#include <QtCore/QSaveFile>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtCore/QUuid>
@@ -77,8 +76,8 @@ QString validate(const TransferRequest &r) {
 }
 
 struct IO {
-    QFile *input = nullptr;
-    QSaveFile *output = nullptr;
+    iiFileProvider::FileDevice *input = nullptr;
+    iiFileProvider::SaveFile *output = nullptr;
     QCryptographicHash hash{QCryptographicHash::Sha256};
     Job *job = nullptr;
     qint64 bytes = 0;
@@ -133,8 +132,8 @@ int progressData(void *opaque, curl_off_t dlTotal, curl_off_t dlNow, curl_off_t 
 TransferResult perform(const TransferRequest &r, Job &job, std::function<void(qint64, qint64)> progress) {
     TransferResult result;
     result.protocol = r.url.scheme();
-    QFile input(r.localPath);
-    QSaveFile output(r.localPath);
+    iiFileProvider::FileDevice input(r.localPath);
+    iiFileProvider::SaveFile output(r.localPath);
     output.setDirectWriteFallback(false);
     IO io;
     io.input = &input; io.output = &output; io.job = &job;
@@ -146,7 +145,7 @@ TransferResult perform(const TransferRequest &r, Job &job, std::function<void(qi
             QCryptographicHash hash(QCryptographicHash::Sha256);
             while (!input.atEnd() && !job.cancelled) {
                 const auto bytes = input.read(512 * 1024);
-                if (bytes.isEmpty() && input.error() != QFile::NoError) { result.error = "local_read_failed"; return result; }
+                if (bytes.isEmpty() && input.error() != iiFileProvider::FileDevice::NoError) { result.error = "local_read_failed"; return result; }
                 hash.addData(bytes);
             }
             if (job.cancelled) { result.cancelled = true; result.error = "cancelled"; return result; }
@@ -193,13 +192,13 @@ TransferResult perform(const TransferRequest &r, Job &job, std::function<void(qi
     if (r.maximumBytes) option(CURLOPT_MAXFILESIZE_LARGE, curl_off_t(r.maximumBytes));
     if (!r.username.isEmpty()) option(CURLOPT_USERNAME, r.username.toUtf8().constData());
     if (!r.password.isEmpty()) option(CURLOPT_PASSWORD, r.password.constData());
-    if (!r.caFile.isEmpty()) option(CURLOPT_CAINFO, QFile::encodeName(r.caFile).constData());
-    if (!r.clientCertificate.isEmpty()) option(CURLOPT_SSLCERT, QFile::encodeName(r.clientCertificate).constData());
-    if (!r.clientKey.isEmpty()) option(CURLOPT_SSLKEY, QFile::encodeName(r.clientKey).constData());
+    if (!r.caFile.isEmpty()) option(CURLOPT_CAINFO, iiFileProvider::FileDevice::encodeName(r.caFile).constData());
+    if (!r.clientCertificate.isEmpty()) option(CURLOPT_SSLCERT, iiFileProvider::FileDevice::encodeName(r.clientCertificate).constData());
+    if (!r.clientKey.isEmpty()) option(CURLOPT_SSLKEY, iiFileProvider::FileDevice::encodeName(r.clientKey).constData());
     if (!r.keyPassword.isEmpty()) option(CURLOPT_KEYPASSWD, r.keyPassword.constData());
-    if (!r.sshKnownHosts.isEmpty()) option(CURLOPT_SSH_KNOWNHOSTS, QFile::encodeName(r.sshKnownHosts).constData());
-    if (!r.sshPrivateKey.isEmpty()) option(CURLOPT_SSH_PRIVATE_KEYFILE, QFile::encodeName(r.sshPrivateKey).constData());
-    if (!r.sshPublicKey.isEmpty()) option(CURLOPT_SSH_PUBLIC_KEYFILE, QFile::encodeName(r.sshPublicKey).constData());
+    if (!r.sshKnownHosts.isEmpty()) option(CURLOPT_SSH_KNOWNHOSTS, iiFileProvider::FileDevice::encodeName(r.sshKnownHosts).constData());
+    if (!r.sshPrivateKey.isEmpty()) option(CURLOPT_SSH_PRIVATE_KEYFILE, iiFileProvider::FileDevice::encodeName(r.sshPrivateKey).constData());
+    if (!r.sshPublicKey.isEmpty()) option(CURLOPT_SSH_PUBLIC_KEYFILE, iiFileProvider::FileDevice::encodeName(r.sshPublicKey).constData());
     if (!r.awsSigV4.isEmpty()) option(CURLOPT_AWS_SIGV4, r.awsSigV4.toLatin1().constData());
     if (r.url.scheme() == "ftpes" || r.url.scheme() == "ftps") option(CURLOPT_USE_SSL, long(CURLUSESSL_ALL));
     curl_slist *headers = nullptr;

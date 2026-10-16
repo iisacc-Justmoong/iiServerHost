@@ -1,3 +1,5 @@
+#include <iiFileProviderStorage.h>
+#include <iiFileProviderPresentation.h>
 #pragma once
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -13,6 +15,7 @@
 namespace iiServerHost::windows_files {
 inline bool safeEntry(const QString& name) {
     return !name.isEmpty() && name != "." && name != ".." && !name.startsWith(".iiserverhost-")
+        && !iiFileProvider::native::Presentation::isControlFile(std::filesystem::path(name.toStdU16String()))
         && !name.contains('/') && !name.contains('\\') && !name.contains(':') && !name.contains(QChar::Null);
 }
 struct Handle {
@@ -24,7 +27,7 @@ struct Handle {
 };
 inline std::unique_ptr<Handle> open(const QString& path, DWORD access, bool directory) {
     const auto native = QDir::toNativeSeparators(path);
-    auto result = std::make_unique<Handle>(CreateFileW(reinterpret_cast<LPCWSTR>(native.utf16()), access,
+    auto result = std::make_unique<Handle>(iiFileProvider::native::createFile(reinterpret_cast<LPCWSTR>(native.utf16()), access,
         FILE_SHARE_READ | (directory ? FILE_SHARE_WRITE : 0), nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
     BY_HANDLE_FILE_INFORMATION info{};
@@ -113,7 +116,7 @@ inline QJsonObject handle(const QString& root, quint64 device, quint64 inode,
     const auto native = QDir::toNativeSeparators(absolute);
     const auto destination = reinterpret_cast<LPCWSTR>(native.utf16());
     if (path.isEmpty()) return protocol::error("invalid_path");
-    if (op == "mkdir") return CreateDirectoryW(destination, nullptr)
+    if (op == "mkdir") return iiFileProvider::native::createDirectoryWindows(destination, nullptr)
         ? QJsonObject{{"ok", true}} : protocol::error("create_failed_or_exists");
     if (op == "write") {
         const auto encoded = request.value("data").toString().toLatin1();
@@ -122,7 +125,7 @@ inline QJsonObject handle(const QString& root, quint64 device, quint64 inode,
         if (!request.value("data").isString() || !decoded || decoded.decoded.size() > FileShare::ChunkBytes) return protocol::error("invalid_data");
         const auto temporary = QDir::toNativeSeparators(QDir(pinned.absolute).filePath(".iiserverhost-" + protocol::uuid()));
         const auto source = reinterpret_cast<LPCWSTR>(temporary.utf16());
-        const auto file = CreateFileW(source, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        const auto file = iiFileProvider::native::createFile(source, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) return protocol::error("write_failed");
         DWORD written = 0;
@@ -130,6 +133,7 @@ inline QJsonObject handle(const QString& root, quint64 device, quint64 inode,
             && written == DWORD(decoded.decoded.size()) && FlushFileBuffers(file);
         const bool published = stored && CreateHardLinkW(destination, source, nullptr);
         CloseHandle(file); DeleteFileW(source);
+        if (published) iiFileProvider::native::Presentation::enqueue(std::filesystem::path(absolute.toStdU16String()));
         return published ? QJsonObject{{"ok", true}, {"size", QString::number(written)}} : protocol::error("write_failed_or_exists");
     }
     return protocol::error("unsupported_operation");

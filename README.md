@@ -1,5 +1,16 @@
 # iiServerHost
 
+## File presentation ownership
+
+FileShare uses iiFileProvider 0.7's control-file rule for both native path access
+and enumeration. Preview/classification companions, private provider catalogs,
+staging and locks are excluded before pagination; ordinary public hidden files
+remain shareable. A directory with hundreds of derived previews therefore does
+not consume a page before its user assets can be listed. The hosting regression
+checks this boundary and preservation of access to original files.
+Completed native upload publication also notifies the provider, including when
+the shared directory is outside a monitored Society drive.
+
 <a id="060-lan-파일-본문의-바이너리-전송"></a>
 
 ## 0.6.0: Binary transmission of LAN  file body content
@@ -48,7 +59,7 @@ A local and remote app-hosting SDK based on C++20 / Qt 6.8.3, version 0.5.0. A c
 - `RelayServer`: List of devices per authenticated account and service, one-time local access token, and request relay. It does not store files. It isolates lists and requests from different accounts.
 - `SessionAuthenticator`: Sends a cookie to the fixed HTTPS `/Account/GraphQL` and reads the verified `account.sub`. The `accountId` display string or a client-declared account is not authorization proof. It does not use response cookies, cache, or redirects.
 - `Peer`: Handles host registration, device search, local-priority transfer, remote switch, exponential reconnection, and request timeout. It displays only hosts of the same `service`.
-- `FileShare`: Includes list, metadata, chunked read, new file creation, and directory creation under root. The application can connect to other storage via `RequestHandler`. iiServerHost does not reference Society.
+- `FileShare`: Includes list, metadata, chunked read, new file creation, and directory creation under root. The application can connect to other storage via `RequestHandler`. iiServerHost does not reference Society. The reserved `.iisacc-temporary.lock` sentinel is excluded from listings and cannot be read, modified, or created through this public API.
 
 Authentication cookies are delivered only to trusted relays and account verification servers. Other devices receive 256-bit random one-time access tokens. Device local certificates SHA-256 are obtained from the trusted relay list and compared against the actual TLS certificate. Certificate errors are never ignored unconditionally. Relays authenticate using the default trusted CA. Non-TLS URLs and listeners are allowed only on numeric loopback addresses.
 

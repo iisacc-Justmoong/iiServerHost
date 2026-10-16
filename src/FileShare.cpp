@@ -1,9 +1,10 @@
+#include <iiFileProviderStorage.h>
+#include <iiFileProviderPresentation.h>
+#include <iiFileProviderDevice.h>
 #include "ServerHost.h"
 #include "Protocol.h"
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
-#include <QTemporaryFile>
 #include "WindowsFileShare.h"
 #ifdef Q_OS_UNIX
 #include <dirent.h>
@@ -18,7 +19,8 @@ bool relative(const QString &path) {
     if (path.size() > 4096 || !path.isValidUtf16() || QDir::isAbsolutePath(path) || path.contains('\\') || path.contains(':') || path.contains(QChar::Null)) return false;
     if (path.isEmpty()) return true;
     for (const auto &part : path.split('/'))
-        if (part.isEmpty() || part == "." || part == ".." || part.startsWith(".iiserverhost-")) return false;
+        if (part.isEmpty() || part == "." || part == ".." || part.startsWith(".iiserverhost-")
+            || iiFileProvider::native::Presentation::isControlFile(std::filesystem::path(part.toStdU16String()))) return false;
     return true;
 }
 #ifdef Q_OS_UNIX
@@ -30,14 +32,14 @@ struct Fd {
     Fd &operator=(const Fd &) = delete;
 };
 int confined(const QString &root, const QString &path, quint64 device, quint64 inode, bool directory) {
-    int fd = ::open(QFile::encodeName(root).constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int fd = iiFileProvider::native::openFile(iiFileProvider::FileDevice::encodeName(root).constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return -1;
     struct stat stat{};
     if (::fstat(fd, &stat) != 0 || quint64(stat.st_dev) != device || quint64(stat.st_ino) != inode) { ::close(fd); return -1; }
     const auto parts = path.isEmpty() ? QStringList() : path.split('/');
     for (qsizetype i = 0; i < parts.size(); ++i) {
         const int flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK | ((directory || i + 1 < parts.size()) ? O_DIRECTORY : 0);
-        const int next = ::openat(fd, QFile::encodeName(parts[i]).constData(), flags);
+        const int next = iiFileProvider::native::openFileAt(fd, iiFileProvider::FileDevice::encodeName(parts[i]).constData(), flags);
         ::close(fd); fd = next; if (fd < 0) return -1;
     }
     return fd;
@@ -57,7 +59,7 @@ FileShare::FileShare(QString root, std::function<bool()> guard) : m_guard(std::m
     if (QDir::isAbsolutePath(root) && info.isDir() && !info.isSymLink() && info.canonicalFilePath() == QDir::cleanPath(root)) m_root = info.canonicalFilePath();
 #ifdef Q_OS_UNIX
     struct stat s{};
-    if (!m_root.isEmpty() && ::lstat(QFile::encodeName(m_root).constData(), &s) == 0) { m_device = s.st_dev; m_inode = s.st_ino; }
+    if (!m_root.isEmpty() && ::lstat(iiFileProvider::FileDevice::encodeName(m_root).constData(), &s) == 0) { m_device = s.st_dev; m_inode = s.st_ino; }
 #elif defined(Q_OS_WIN)
     const auto rootHandle = windows_files::open(m_root, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true);
     BY_HANDLE_FILE_INFORMATION nativeInfo{};
@@ -90,7 +92,7 @@ QJsonObject FileShare::handle(const QJsonObject &request) const {
         DIR *directory = ::fdopendir(fd); if (!directory) { ::close(fd); return protocol::error("not_directory"); }
         QJsonArray entries; qint64 index = 0; bool more = false;
         while (const auto *entry = ::readdir(directory)) {
-            const QByteArray name(entry->d_name); const auto text = QFile::decodeName(name);
+            const QByteArray name(entry->d_name); const auto text = iiFileProvider::FileDevice::decodeName(name);
             if (name == "." || name == ".." || !relative(text)) continue;
             struct stat s{};
             if (::fstatat(fd, name.constData(), &s, AT_SYMLINK_NOFOLLOW) != 0 || (!S_ISREG(s.st_mode) && !S_ISDIR(s.st_mode))) continue;
@@ -121,16 +123,16 @@ QJsonObject FileShare::handle(const QJsonObject &request) const {
     if (op == "write" || op == "mkdir") {
         if (path.isEmpty()) return protocol::error("invalid_path");
         const auto parent = path.contains('/') ? path.left(path.lastIndexOf('/')) : QString();
-        const auto name = QFile::encodeName(path.section('/', -1));
+        const auto name = iiFileProvider::FileDevice::encodeName(path.section('/', -1));
         Fd directory(confined(m_root, parent, m_device, m_inode, true));
         if (directory.value < 0) return protocol::error("not_directory");
-        if (op == "mkdir") return ::mkdirat(directory.value, name.constData(), 0700) == 0 ? QJsonObject{{"ok", true}} : protocol::error("create_failed_or_exists");
+        if (op == "mkdir") return iiFileProvider::native::makeDirectoryAt(directory.value, name.constData(), 0700) == 0 ? QJsonObject{{"ok", true}} : protocol::error("create_failed_or_exists");
         const auto encoded = request.value("data").toString().toLatin1();
         if (encoded.size() > ((ChunkBytes + 2) / 3) * 4) return protocol::error("write_too_large");
         const auto decoded = QByteArray::fromBase64Encoding(encoded, QByteArray::AbortOnBase64DecodingErrors);
         if (!request.value("data").isString() || !decoded || decoded.decoded.size() > ChunkBytes) return protocol::error("invalid_data");
         const auto temporary = QByteArray(".iiserverhost-") + protocol::uuid().toLatin1();
-        Fd fd(::openat(directory.value, temporary.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+        Fd fd(iiFileProvider::native::openFileAt(directory.value, temporary.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
         if (fd.value < 0) return protocol::error("write_failed");
         qint64 written = 0;
         while (written < decoded.decoded.size()) {
@@ -140,6 +142,7 @@ QJsonObject FileShare::handle(const QJsonObject &request) const {
         const bool ok = written == decoded.decoded.size() && ::fsync(fd.value) == 0
             && ::linkat(directory.value, temporary.constData(), directory.value, name.constData(), 0) == 0;
         ::unlinkat(directory.value, temporary.constData(), 0);
+        if (ok) iiFileProvider::native::Presentation::enqueue(std::filesystem::path(absolute.toStdU16String()));
         return ok ? QJsonObject{{"ok", true}, {"size", QString::number(written)}} : protocol::error("write_failed_or_exists");
     }
 #elif defined(Q_OS_WIN)

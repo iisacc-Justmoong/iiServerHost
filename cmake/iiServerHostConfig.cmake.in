@@ -1,6 +1,14 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+find_dependency(iiFileProvider 0.7 CONFIG HINTS "$ENV{IIFILEPROVIDER_PREFIX}" "$ENV{HOME}/.local/SDK/iiFileProvider")
+find_dependency(iiFileProviderNative 0.7 CONFIG HINTS "$ENV{IIFILEPROVIDER_PREFIX}" "$ENV{HOME}/.local/SDK/iiFileProvider")
+
+
+
+
+
+
 find_dependency(Qt6 6.8.3 EXACT COMPONENTS Core Network WebSockets)
 if(@IISERVERHOST_NEEDS_CRYPTO@)
     find_dependency(OpenSSL 3 COMPONENTS Crypto)

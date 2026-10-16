@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
 project(iiServerHost VERSION 0.6.0 LANGUAGES CXX)
+# File creation is owned by iiFileProvider.
+find_package(iiFileProvider 0.7 CONFIG REQUIRED HINTS "$ENV{IIFILEPROVIDER_PREFIX}" "$ENV{HOME}/.local/SDK/iiFileProvider")
+link_libraries(iiFileProvider::iiFileProvider)
+find_package(iiFileProviderNative 0.7 CONFIG REQUIRED HINTS "$ENV{IIFILEPROVIDER_PREFIX}" "$ENV{HOME}/.local/SDK/iiFileProvider")
+link_libraries(iiFileProvider::Native)
+
+
+
+
 
 if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     if(DEFINED ENV{HOME})
@@ -41,7 +50,31 @@ if(IISERVERHOST_WITH_CURL)
 endif()
 if(NOT IOS AND NOT ANDROID)
     configure_file(tools/ftp_server.py "${CMAKE_CURRENT_BINARY_DIR}/ftp_server.py" COPYONLY)
-    install(FILES tools/ftp_server.py tools/ftp-requirements.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
+    configure_file(tools/provider_fs.py "${CMAKE_CURRENT_BINARY_DIR}/provider_fs.py" COPYONLY)
+    file(COPY "${iiFileProviderNative_PYTHON_DIRECTORY}/ii_file_provider"
+        DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
+        FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
+    install(FILES tools/ftp_server.py tools/provider_fs.py tools/ftp-requirements.txt
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost)
+    install(DIRECTORY "${iiFileProviderNative_PYTHON_DIRECTORY}/ii_file_provider"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/iiServerHost
+        FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
+    get_target_property(_provider_kind iiFileProvider::Native TYPE)
+    get_target_property(_provider_imported iiFileProvider::Native IMPORTED)
+    if(_provider_kind STREQUAL "SHARED_LIBRARY")
+        add_custom_target(iiServerHostProviderRuntime ALL
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/lib"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:iiFileProvider::Native>"
+                "${CMAKE_CURRENT_BINARY_DIR}/lib/$<TARGET_FILE_NAME:iiFileProvider::Native>"
+            DEPENDS iiFileProvider::Native VERBATIM)
+        if(_provider_imported)
+            install(IMPORTED_RUNTIME_ARTIFACTS iiFileProvider::Native
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        endif()
+    endif()
+    install(DIRECTORY "${iiFileProviderNative_LICENSE_DIRECTORY}/"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/iiFileProviderNative)
     set(IISERVERHOST_NEEDS_CRYPTO TRUE)
     find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
     target_sources(iiServerHost PRIVATE src/LanIdentity.cpp src/LanIdentity.h)
@@ -67,6 +100,11 @@ set_target_properties(iiServerHost PROPERTIES
     VISIBILITY_INLINES_HIDDEN YES
     INSTALL_RPATH_USE_LINK_PATH TRUE
 )
+if(APPLE)
+    set_property(TARGET iiServerHost PROPERTY INSTALL_RPATH "@loader_path")
+elseif(UNIX)
+    set_property(TARGET iiServerHost PROPERTY INSTALL_RPATH "$ORIGIN")
+endif()
 
 if(BUILD_TESTING)
     include(cmake/TestCertificate.cmake)
@@ -136,6 +174,9 @@ if(NOT IOS AND NOT ANDROID)
     install(TARGETS ii-server-relay RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     if(BUILD_TESTING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_test(NAME iiServerHost.provider_ftp COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/provider_ftp.py" "${CMAKE_CURRENT_BINARY_DIR}")
+        set_tests_properties(iiServerHost.provider_ftp PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
         add_test(NAME iiServerHost.protocol_processes COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_protocols.py" "$<TARGET_FILE:ii-file-transfer>"
             "$<TARGET_FILE:ii-storage>" "${CMAKE_CURRENT_BINARY_DIR}")
