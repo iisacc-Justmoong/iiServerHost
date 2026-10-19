@@ -3,6 +3,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QTemporaryDir>
+#include <QtCore/QProcess>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
@@ -64,7 +65,11 @@ void StorageBridgeTests::rejectUnsafeConfiguration() {
     QCOMPARE(run(bridge, {StorageOperation::List, "remote:path"}).error, "explicit_config_required");
     const auto config = dir.filePath("open.conf");
     QFile f(config); QVERIFY(f.open(QIODevice::WriteOnly)); f.write("[test]\ntype = local\n"); f.close();
+#ifdef Q_OS_WIN
+    QCOMPARE(QProcess::execute("icacls.exe", {QDir::toNativeSeparators(config), "/grant", "*S-1-1-0:(R)"}), 0);
+#else
     QVERIFY(f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ReadGroup));
+#endif
     StorageBridge unsafe({executable, config, {}, dir.path()});
     QCOMPARE(run(unsafe, {StorageOperation::Providers}).error, "private_config_required");
 }
@@ -83,6 +88,10 @@ void StorageBridgeTests::serverRequiresAuthentication() {
     QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "tls_identity_required");
     options.protocol = FileServerProtocol::Sftp;
     QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "ssh_host_key_required");
+#ifdef Q_OS_WIN
+    options.protocol = FileServerProtocol::Nfs;
+    QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "unsupported_protocol");
+#endif
     QVERIFY(!server.isRunning());
 }
 QTEST_GUILESS_MAIN(StorageBridgeTests)

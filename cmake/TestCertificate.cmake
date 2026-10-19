@@ -25,3 +25,15 @@ if(NOT test_certificate_result EQUAL 0)
 endif()
 file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/test-key.pem" PERMISSIONS OWNER_READ OWNER_WRITE)
 file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/test-ca-key.pem" PERMISSIONS OWNER_READ OWNER_WRITE)
+if(WIN32)
+    # chmod controls a read-only attribute on NTFS, not the access-control list.
+    # OpenSSH rejects inherited access by other Windows identities.
+    foreach(test_private_key IN ITEMS test-key.pem test-ca-key.pem)
+        execute_process(COMMAND icacls "${CMAKE_CURRENT_BINARY_DIR}/${test_private_key}"
+            /inheritance:r /grant:r "$ENV{USERDOMAIN}\\$ENV{USERNAME}:(F)"
+            RESULT_VARIABLE test_key_acl OUTPUT_QUIET ERROR_QUIET)
+        if(NOT test_key_acl EQUAL 0)
+            message(FATAL_ERROR "Could not restrict the ephemeral Windows test key ACL")
+        endif()
+    endforeach()
+endif()

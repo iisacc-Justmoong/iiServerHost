@@ -42,6 +42,9 @@ if(IISERVERHOST_WITH_STORAGE_PROCESS)
         message(FATAL_ERROR "External storage processes are not supported by the mobile SDK")
     endif()
     target_compile_definitions(iiServerHost PRIVATE IISERVERHOST_STORAGE_PROCESS=1)
+    if(WIN32)
+        target_link_libraries(iiServerHost PRIVATE advapi32)
+    endif()
 endif()
 if(IISERVERHOST_WITH_CURL)
     find_package(CURL 7.85 REQUIRED)
@@ -67,6 +70,25 @@ if(NOT IOS AND NOT ANDROID)
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:iiFileProvider::Native>"
                 "${CMAKE_CURRENT_BINARY_DIR}/lib/$<TARGET_FILE_NAME:iiFileProvider::Native>"
             DEPENDS iiFileProvider::Native VERBATIM)
+        if(WIN32)
+            # ctypes resolves transitive dependencies beside the loaded DLL;
+            # PATH entries alone are insufficient on current Python versions.
+            get_target_property(_sqlite_library SQLite3::SQLite3 IMPORTED_LOCATION_RELEASE)
+            if(NOT _sqlite_library)
+                get_target_property(_sqlite_library SQLite3::SQLite3 IMPORTED_LOCATION)
+            endif()
+            if(_sqlite_library)
+                get_filename_component(_sqlite_library_directory "${_sqlite_library}" DIRECTORY)
+                find_file(IISERVERHOST_SQLITE_RUNTIME NAMES sqlite3.dll
+                    HINTS "${_sqlite_library_directory}/../bin" NO_DEFAULT_PATH)
+            endif()
+            if(IISERVERHOST_SQLITE_RUNTIME)
+                add_custom_command(TARGET iiServerHostProviderRuntime POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${IISERVERHOST_SQLITE_RUNTIME}"
+                        "${CMAKE_CURRENT_BINARY_DIR}/lib/sqlite3.dll" VERBATIM)
+                install(FILES "${IISERVERHOST_SQLITE_RUNTIME}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+            endif()
+        endif()
         if(_provider_imported)
             install(IMPORTED_RUNTIME_ARTIFACTS iiFileProvider::Native
                 RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -174,12 +196,45 @@ if(NOT IOS AND NOT ANDROID)
     install(TARGETS ii-server-relay RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     if(BUILD_TESTING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(_smb_fixture_arguments)
+        if(WIN32)
+            find_program(IISERVERHOST_DOTNET_EXECUTABLE NAMES dotnet REQUIRED)
+            set(_smb_fixture_directory "${CMAKE_CURRENT_BINARY_DIR}/smb-fixture")
+            set(_smb_fixture_project "${CMAKE_CURRENT_SOURCE_DIR}/tests/SmbWindowsFixture/SmbWindowsFixture.csproj")
+            set(_smb_fixture_dll "${_smb_fixture_directory}/SmbWindowsFixture.dll")
+            add_custom_command(OUTPUT "${_smb_fixture_dll}"
+                COMMAND "${CMAKE_COMMAND}" -E env
+                    "DOTNET_CLI_HOME=${_smb_fixture_directory}/home"
+                    "NUGET_PACKAGES=${_smb_fixture_directory}/packages"
+                    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_GENERATE_ASPNET_CERTIFICATE=false
+                    "${Python3_EXECUTABLE}" -B
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/SmbWindowsFixture/prepare_source.py"
+                    "${_smb_fixture_directory}"
+                COMMAND "${CMAKE_COMMAND}" -E env
+                    "DOTNET_CLI_HOME=${_smb_fixture_directory}/home"
+                    "NUGET_PACKAGES=${_smb_fixture_directory}/packages"
+                    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_GENERATE_ASPNET_CERTIFICATE=false
+                    "${IISERVERHOST_DOTNET_EXECUTABLE}" build "${_smb_fixture_project}"
+                    --configuration Release --output "${_smb_fixture_directory}" --nologo
+                    "-p:BaseIntermediateOutputPath=${_smb_fixture_directory}/obj/"
+                    "-p:SMBSourceRoot=${_smb_fixture_directory}/SMBLibrary-582635541d2ec0c84eac5f66cbebd41e2d35c7ae"
+                DEPENDS "${_smb_fixture_project}"
+                    tests/SmbWindowsFixture/Program.cs tests/SmbWindowsFixture/prepare_source.py
+                VERBATIM)
+            add_custom_target(iiServerHostSmbFixture ALL DEPENDS "${_smb_fixture_dll}")
+            set(_smb_fixture_arguments "${IISERVERHOST_DOTNET_EXECUTABLE}" "${_smb_fixture_dll}")
+        endif()
         add_test(NAME iiServerHost.provider_ftp COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/provider_ftp.py" "${CMAKE_CURRENT_BINARY_DIR}")
         set_tests_properties(iiServerHost.provider_ftp PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+        add_test(NAME iiServerHost.provider_ftps COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/provider_ftp.py" "${CMAKE_CURRENT_BINARY_DIR}" --implicit)
+        set_tests_properties(iiServerHost.provider_ftps PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+        add_test(NAME iiServerHost.fixture_cleanup COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixture_directory.py")
         add_test(NAME iiServerHost.protocol_processes COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_protocols.py" "$<TARGET_FILE:ii-file-transfer>"
-            "$<TARGET_FILE:ii-storage>" "${CMAKE_CURRENT_BINARY_DIR}")
+            "$<TARGET_FILE:ii-storage>" "${CMAKE_CURRENT_BINARY_DIR}" ${_smb_fixture_arguments})
         set_tests_properties(iiServerHost.protocol_processes PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
         add_test(NAME iiServerHost.process_hosting COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_hosting.py" "$<TARGET_FILE:ii-server-relay>"

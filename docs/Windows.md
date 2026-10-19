@@ -1,6 +1,8 @@
 # Windows 실행 검증
 
-Qt 6.8 MinGW 키트와 같은 컴파일러로 빌드한 SDK를 사용한다. 빌드 디렉터리는 `build/`이다. `ctest --test-dir build --output-on-failure`는 루프백 HTTP 인증 서버, 별도 relay/host/client 프로세스를 실행하고 정확한 파일 바이트를 검증한다.
+Qt 6.8.3 MSVC 2022 키트와 MSVC x64로 빌드한 SDK를 사용한다. 빌드 디렉터리는 `build/`이다. `ctest --test-dir build --output-on-failure`는 루프백 HTTP 인증 서버, 별도 relay/host/client 프로세스를 실행하고 정확한 파일 바이트를 검증한다.
 
 Windows의 `select()`는 프로세스 파이프를 지원하지 않으므로 프로세스 준비 메시지는 읽기 스레드와 타임아웃이 있는 큐로 수신한다. 준비 메시지 없이 종료하거나 제한 시간 내 준비되지 않으면 검증이 실패한다.
 Windows 파일 공유는 네이티브 핸들로 루트의 볼륨·파일 신원을 확인하고 작업 중 상위 디렉터리의 교체를 막는다. reparse point를 따라가지 않으며, 파일 읽기는 청크 단위로 제한한다. 새 파일은 임시 파일의 디스크 동기화 후 하드 링크로 게시하며 기존 대상을 덮어쓰지 않는다. 실제 프로세스 간 전송과 한글 중첩 경로의 생성·조회·읽기 테스트를 함께 실행한다.
+
+최신 구성·실행 결과와 복구 조치는 [Windows 빌드 및 실행](WindowsBuildAndRun.md)에 기록한다.

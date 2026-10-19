@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from fixture_directory import FixtureDirectory
 
 transfer_exe, storage_exe, build_dir = map(lambda x: Path(x).resolve(), sys.argv[1:4])
 rclone = os.environ.get("IISERVERHOST_TEST_RCLONE", "")
@@ -47,7 +48,7 @@ def free_port():
         return s.getsockname()[1]
 
 
-with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as temporary:
+with FixtureDirectory(prefix="protocol-process-", dir=build_dir) as temporary:
     base = Path(temporary)
     runtime = base / "runtime"
     runtime.mkdir(mode=0o700)
@@ -113,9 +114,18 @@ with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as t
                 raise AssertionError((protocol, "managed shutdown timed out"))
             assert password not in stdout + stderr, "credential leaked to diagnostics"
             # Parent shutdown must also close the managed backend listener.
-            with socket.socket() as probe:
-                probe.settimeout(0.5)
-                assert probe.connect_ex(("127.0.0.1", port)) != 0, (protocol, "orphan server")
+            # A Windows job closes children asynchronously after its owner
+            # exits. Require the listener to close within the shutdown budget.
+            stopped = False
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with socket.socket() as probe:
+                    probe.settimeout(0.2)
+                    if probe.connect_ex(("127.0.0.1", port)) != 0:
+                        stopped = True
+                        break
+                time.sleep(0.02)
+            assert stopped, (protocol, "orphan server")
 
     def roundtrip(scheme, port, name, **credentials):
         url = f"{scheme}://127.0.0.1:{port}/" + urllib.parse.quote(name)
@@ -228,7 +238,8 @@ with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as t
             client.retrbinary("RETR provider-files/renamed.bin", received.extend)
             assert received == b"first-append"
             client.storbinary("STOU provider-files/unique", io.BytesIO(b"exclusive"))
-            entries = list((root / "provider-files").iterdir())
+            entries = [path for path in (root / "provider-files").iterdir()
+                       if not (path.name == ".iisacc-temporary.lock" or path.name.endswith(".iisacc-preview"))]
             assert len(entries) == 2 and any(path.read_bytes() == b"exclusive" for path in entries)
         finally:
             client.close()
@@ -336,54 +347,66 @@ with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as t
         assert struct.unpack("!I", response[offset:offset + 4])[0] == 0, response[:32]
         return response[offset + 4:]
 
-    with server("nfs", read_only=True) as port:
-        mount = rpc(port, 100005, 1, xdr_bytes(b"/"))
-        assert struct.unpack("!I", mount[:4])[0] == 0, mount
-        length = struct.unpack("!I", mount[4:8])[0]
-        directory_handle = mount[8:8 + length]
-        lookup = rpc(port, 100003, 3, xdr_bytes(directory_handle) + xdr_bytes(b"scp.bin"))
-        assert struct.unpack("!I", lookup[:4])[0] == 0, lookup
-        length = struct.unpack("!I", lookup[4:8])[0]
-        file_handle = lookup[8:8 + length]
-        received = b""
-        while len(received) < len(payload):
-            response = rpc(port, 100003, 6, xdr_bytes(file_handle) + struct.pack("!QI", len(received), 65536))
-            assert struct.unpack("!I", response[:4])[0] == 0, response[:32]
-            offset = 8 + (84 if struct.unpack("!I", response[4:8])[0] else 0)
-            count, eof, size = struct.unpack("!3I", response[offset:offset + 12])
-            assert count == size and count > 0, response[:32]
-            received += response[offset + 12:offset + 12 + size]
-            if eof:
-                break
-        assert received == payload
-        checks.append("NFSv3 MOUNT/LOOKUP/READ full binary file")
+    if os.name == "nt":
+        config = private_json(base / "nfs-unsupported.json", {"backend": backend, "server": dict(protocol="nfs", root=str(root), address="127.0.0.1", port=free_port(), readOnly=True)})
+        unsupported = subprocess.run([storage_exe, "--serve", "--config", config], capture_output=True, text=True, timeout=5)
+        assert unsupported.returncode != 0 and json.loads(unsupported.stdout)["error"] == "unsupported_protocol"
+        checks.append("Windows NFS hosting unavailable: explicit unsupported_protocol verified")
+    else:
+        with server("nfs", read_only=True) as port:
+            mount = rpc(port, 100005, 1, xdr_bytes(b"/"))
+            assert struct.unpack("!I", mount[:4])[0] == 0, mount
+            length = struct.unpack("!I", mount[4:8])[0]
+            directory_handle = mount[8:8 + length]
+            lookup = rpc(port, 100003, 3, xdr_bytes(directory_handle) + xdr_bytes(b"scp.bin"))
+            assert struct.unpack("!I", lookup[:4])[0] == 0, lookup
+            length = struct.unpack("!I", lookup[4:8])[0]
+            file_handle = lookup[8:8 + length]
+            received = b""
+            while len(received) < len(payload):
+                response = rpc(port, 100003, 6, xdr_bytes(file_handle) + struct.pack("!QI", len(received), 65536))
+                assert struct.unpack("!I", response[:4])[0] == 0, response[:32]
+                offset = 8 + (84 if struct.unpack("!I", response[4:8])[0] else 0)
+                count, eof, size = struct.unpack("!3I", response[offset:offset + 12])
+                assert count == size and count > 0, response[:32]
+                received += response[offset + 12:offset + 12 + size]
+                if eof:
+                    break
+            assert received == payload
+            checks.append("NFSv3 MOUNT/LOOKUP/READ full binary file")
 
-    (root / "nfs-write.bin").write_bytes(payload)
-    with server("nfs") as port:
-        mount = rpc(port, 100005, 1, xdr_bytes(b"/"))
-        assert struct.unpack("!I", mount[:4])[0] == 0
-        length = struct.unpack("!I", mount[4:8])[0]
-        lookup = rpc(port, 100003, 3, xdr_bytes(mount[8:8 + length]) + xdr_bytes(b"nfs-write.bin"))
-        assert struct.unpack("!I", lookup[:4])[0] == 0
-        length = struct.unpack("!I", lookup[4:8])[0]
-        changed = b"updated-through-nfs\0"
-        result = rpc(port, 100003, 7, xdr_bytes(lookup[8:8 + length])
-                     + struct.pack("!QII", 0, len(changed), 2) + xdr_bytes(changed))
-        assert struct.unpack("!I", result[:4])[0] == 0, result[:32]
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not (root / "nfs-write.bin").read_bytes().startswith(changed):
-            time.sleep(0.05)
-        assert (root / "nfs-write.bin").read_bytes() == changed + payload[len(changed):]
-        checks.append("NFSv3 stable WRITE persists through VFS cache")
+        (root / "nfs-write.bin").write_bytes(payload)
+        with server("nfs") as port:
+            mount = rpc(port, 100005, 1, xdr_bytes(b"/"))
+            assert struct.unpack("!I", mount[:4])[0] == 0
+            length = struct.unpack("!I", mount[4:8])[0]
+            lookup = rpc(port, 100003, 3, xdr_bytes(mount[8:8 + length]) + xdr_bytes(b"nfs-write.bin"))
+            assert struct.unpack("!I", lookup[:4])[0] == 0
+            length = struct.unpack("!I", lookup[4:8])[0]
+            changed = b"updated-through-nfs\0"
+            result = rpc(port, 100003, 7, xdr_bytes(lookup[8:8 + length])
+                         + struct.pack("!QII", 0, len(changed), 2) + xdr_bytes(changed))
+            assert struct.unpack("!I", result[:4])[0] == 0, result[:32]
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not (root / "nfs-write.bin").read_bytes().startswith(changed):
+                time.sleep(0.05)
+            assert (root / "nfs-write.bin").read_bytes() == changed + payload[len(changed):]
+            checks.append("NFSv3 stable WRITE persists through VFS cache")
 
     port = free_port()
-    smb = subprocess.Popen([sys.executable, "-B", str(Path(__file__).with_name("smb_fixture.py")), str(root), str(port)],
+    if sys.platform == "win32":
+        assert len(sys.argv) == 6, "CMake must supply the Windows SMB fixture runtime and DLL"
+        smb_command = sys.argv[4:6]
+    else:
+        smb_command = [sys.executable, "-B", str(Path(__file__).with_name("smb_fixture.py"))]
+    smb = subprocess.Popen([*smb_command, str(root), str(port)],
                            env=dict(os.environ, FIXTURE_USER=username, FIXTURE_PASSWORD=password),
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            assert smb.poll() is None, "SMB fixture exited"
+            if smb.poll() is not None:
+                raise AssertionError(("SMB fixture exited", smb.communicate()))
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
                     break
@@ -401,6 +424,12 @@ with tempfile.TemporaryDirectory(prefix="protocol-process-", dir=build_dir) as t
         assert any(item["Name"] == "smb.bin" for item in listed)
         storage("remove-file", source="nas:files/smb.bin", remote_config=remote)
         checks.append("authenticated SMB2 NAS upload/download/list/remove")
+        unauthenticated = base / "invalid-smb-account.conf"
+        unauthenticated.write_text(remote.read_text().replace(
+            "user = " + username, "user = unregistered-fixture-account"))
+        unauthenticated.chmod(0o600)
+        storage("list", source="nas:files", remote_config=unauthenticated, success=False)
+        checks.append("SMB2 rejects an unregistered account")
     finally:
         smb.terminate()
         try:

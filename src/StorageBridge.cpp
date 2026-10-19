@@ -13,6 +13,11 @@
 #include <QtCore/QProcessEnvironment>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QStandardPaths>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <aclapi.h>
+#undef CopyFile
+#endif
 
 namespace iiServerHost {
 namespace {
@@ -23,6 +28,26 @@ bool privatePath(const QString &path, bool directory) {
 #ifdef Q_OS_UNIX
     const auto other = QFile::ReadGroup | QFile::WriteGroup | QFile::ExeGroup | QFile::ReadOther | QFile::WriteOther | QFile::ExeOther;
     if (f.permissions() & other) return false;
+#elif defined(Q_OS_WIN)
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const auto native = QDir::toNativeSeparators(f.absoluteFilePath());
+    if (GetNamedSecurityInfoW(reinterpret_cast<LPWSTR>(const_cast<ushort *>(native.utf16())), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS)
+        return false;
+    bool restricted = dacl != nullptr;
+    for (const auto kind : {WinWorldSid, WinAuthenticatedUserSid, WinBuiltinUsersSid}) {
+        BYTE sid[SECURITY_MAX_SID_SIZE]; DWORD size = sizeof(sid);
+        TRUSTEE_W trustee{}; ACCESS_MASK rights = 0;
+        if (!CreateWellKnownSid(kind, nullptr, sid, &size)) { restricted = false; break; }
+        BuildTrusteeWithSidW(&trustee, sid);
+        if (GetEffectiveRightsFromAclW(dacl, &trustee, &rights) != ERROR_SUCCESS
+            || (rights & (FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER))) {
+            restricted = false; break;
+        }
+    }
+    LocalFree(descriptor);
+    if (!restricted) return false;
 #endif
     return f.isReadable();
 }
@@ -62,11 +87,22 @@ QProcessEnvironment environment(const StorageBridgeOptions &o) {
     env.insert("TMPDIR", o.runtimeDirectory);
     env.insert("TMP", o.runtimeDirectory);
     env.insert("TEMP", o.runtimeDirectory);
+    // Python's Windows Path.home() needs USERPROFILE, unlike the Unix pwd
+    // fallback. Keep the child's home/cache inside its private runtime area.
+    env.insert("USERPROFILE", o.runtimeDirectory);
+    env.insert("HOME", o.runtimeDirectory);
+    env.insert("PYTHONNOUSERSITE", "1");
     if (!o.configPassword.isEmpty()) env.insert("RCLONE_CONFIG_PASS", QString::fromUtf8(o.configPassword));
     return env;
 }
 QStringList commonArguments(const StorageBridgeOptions &o) {
-    return {"--config", o.configFile.isEmpty() ? QProcess::nullDevice() : o.configFile,
+    // Go's Windows path normalizer rejects Qt's Win32 device path \\.\NUL.
+#ifdef Q_OS_WIN
+    const QString emptyConfig = QStringLiteral("NUL");
+#else
+    const QString emptyConfig = QProcess::nullDevice();
+#endif
+    return {"--config", o.configFile.isEmpty() ? emptyConfig : o.configFile,
             "--cache-dir", o.runtimeDirectory, "--use-json-log", "--log-level", "ERROR", "--stats", "0",
             "--ask-password=false", "--retries", "1", "--low-level-retries", "1"};
 }
@@ -78,6 +114,24 @@ struct BridgeJob {
     bool completed = false;
     bool json = false;
 };
+void bindChildLifetime(QProcess *process) {
+#ifdef Q_OS_WIN
+    const auto job = std::shared_ptr<void>(CreateJobObjectW(nullptr, nullptr), [](void *value) {
+        if (value) CloseHandle(value);
+    });
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    const bool configured = job && SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    QObject::connect(process, &QProcess::started, process, [process, job, configured] {
+        const auto child = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, DWORD(process->processId()));
+        const bool assigned = configured && child && AssignProcessToJobObject(job.get(), child);
+        if (child) CloseHandle(child);
+        if (!assigned) process->kill();
+    });
+#else
+    Q_UNUSED(process)
+#endif
+}
 bool inside(const QString &path, const QString &root) {
     const auto clean = QDir::cleanPath(path);
     return clean == root || clean.startsWith(root + '/');
@@ -102,6 +156,11 @@ ServerSpec serverSpec(FileServerProtocol protocol) {
     return {};
 }
 QString validateServer(const FileServerOptions &o, const StorageBridgeOptions &backend) {
+#ifdef Q_OS_WIN
+    // rclone builds its NFS server only for Unix. Report platform support
+    // before claiming a launch and waiting for a child to exit.
+    if (o.protocol == FileServerProtocol::Nfs) return "unsupported_protocol";
+#endif
     const auto spec = serverSpec(o.protocol);
     const bool pythonFtp = spec.command == "ftps" || spec.command == "ftpes";
     auto error = validateBackend(backend, !pythonFtp);
@@ -196,6 +255,7 @@ QString StorageBridge::start(const StorageRequest &request) {
     }
     auto job = std::make_shared<BridgeJob>();
     auto *process = new QProcess(this);
+    bindChildLifetime(process);
     job->process = process; job->json = json;
     auto *timer = new QTimer(process); timer->setSingleShot(true);
     auto finish = [this, job, id, timer](int code, QProcess::ExitStatus status) {
@@ -303,6 +363,7 @@ bool FileProtocolServer::start(const FileServerOptions &options) {
         env.insert("IISERVERHOST_FTP_PASSWORD", QString::fromUtf8(options.password));
     } else args += commonArguments(d->backend);
     auto *process = new QProcess(this); d->process = process;
+    bindChildLifetime(process);
     connect(process, &QProcess::readyReadStandardOutput, this, [process] { process->readAllStandardOutput(); });
     connect(process, &QProcess::readyReadStandardError, this, [process] { process->readAllStandardError(); });
     connect(process, &QProcess::started, this, &FileProtocolServer::started);
