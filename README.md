@@ -185,7 +185,7 @@ References: [Qt WebSockets](https://doc.qt.io/qt-6.8/qtwebsockets-index.html), [
 
 ## License
 
-SPDX -License-Identifier: AGPL-3.0 -only. Its own code follows [LICENSE](LICENSE). It does not replace the separate licenses of external libraries such as Qt.
+SPDX-License-Identifier: MIT. Its own code follows [LICENSE](LICENSE). It does not replace the separate licenses of external libraries such as Qt.
 
 `ii-server-host` is a diagnostic executable that uses the same SDK even without a consumer app. It hosts `--root`, `--relay`, `--id`, and `--credential-file`, reads a chunk via `--peer ID --path relative/path --read`, or reads the list without `--read`. It passes LAN and `--certificate` together to the public `--key` listener. It can force a remote path via `--no-local`. The credential file is set to be readable only by the owner and is not included in version control. `iiServerHost.process_hosting` verifies the actual file bytes from both paths via the HTTP authentication verification server and separate relay, host, and client processes.
 
