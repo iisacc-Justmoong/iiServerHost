@@ -4,7 +4,7 @@
 #include <QtEndian>
 #include <array>
 
-namespace iiServerHost::protocol {
+namespace iiWebServer::protocol {
 // Private local transport codec. Only the three existing file-data fields can
 // become binary. Pairing/control messages and relay traffic keep JSON framing.
 class BinaryFrame final {

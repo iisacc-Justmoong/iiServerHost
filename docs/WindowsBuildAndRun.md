@@ -1,4 +1,4 @@
-# iiServerHost: Windows 빌드 및 실행
+# iiWebServer: Windows 빌드 및 실행
 
 LAN TLS pairing, hosting 및 파일 전송을 제공하는 Qt 기반 서버 SDK이다.
 
@@ -16,7 +16,7 @@ Windows rclone의 NFS 서버는 제공되지 않는다. 해당 요청을 `unsupp
 
 - [iiFileProvider](../../../SDK/iiFileProvider/docs/WindowsBuildAndRun.md)
 
-- iiFileProvider 및 Native, Qt Core/Network/WebSockets/Test, CURL 7.85 이상과 OpenSSL Crypto가 필요하다.
+- iiFileProvider 및 Native, iiNetwork 0.5, Qt Core/Test, CURL 7.85 이상과 OpenSSL Crypto/SSL가 필요하다.
 - 외부 storage process 기능을 실제로 사용하려면 별도로 해당 프로그램이 필요하다. fixture와 실제 서비스 연결을 구분한다.
 
 프로젝트별 Windows 조건은 다음과 같다.
@@ -39,7 +39,7 @@ $python = (Join-Path $workspace 'Tools/Python314/tools/python.exe').Replace('\',
 $compiler = (Get-Command cl.exe -ErrorAction Stop).Source.Replace('\', '/')
 $toolchain = (Join-Path $workspace 'Tools/vcpkg/scripts/buildsystems/vcpkg.cmake').Replace('\', '/')
 $msvcInclude = (Join-Path $workspace 'SDK/Windows/WindowsMsvcPrefix.cmake').Replace('\', '/')
-$prefix = (Join-Path $env:USERPROFILE '.local/SDK/iiServerHost').Replace('\', '/')
+$prefix = (Join-Path $env:USERPROFILE '.local/SDK/iiWebServer').Replace('\', '/')
 ```
 
 `Enter-DevEnvironment.ps1`은 Qt MSVC kit, vcpkg, 설치된 SDK의 검색 경로와 UTF-8 설정을 준비한다. `CMAKE_PREFIX_PATH`의 디렉터리 존재만으로 의존성 검증을 대신하지 않는다. 선행 SDK의 실행 검사와 설치를 먼저 완료해야 한다.
@@ -61,8 +61,8 @@ $configure = @(
     "-DPython_EXECUTABLE=$python"
     '-DQt6_DIR=C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6'
     '-DBUILD_TESTING=ON'
-    '-DIISERVERHOST_WITH_CURL=ON'
-    '-DIISERVERHOST_WITH_STORAGE_PROCESS=ON'
+    '-DIIWEBSERVER_WITH_CURL=ON'
+    '-DIIWEBSERVER_WITH_STORAGE_PROCESS=ON'
 )
 & cmake @configure
 if ($LASTEXITCODE -ne 0) { throw 'CMake 구성 실패' }
@@ -95,8 +95,8 @@ Windows SMB2 검사는 .NET 10 SDK와 [SMBLibrary](https://github.com/TalAloni/S
 실제 프로토콜 검사는 rclone 1.75.2와 `pyftpdlib`/`pyOpenSSL`을 사용한다. libcurl은 vcpkg의 `curl[openssl,ssh]:x64-windows` 구성으로 준비하여 사용자 지정 CA 파일과 SFTP known-host 검사를 지원한다. 기본 Schannel 구성에서 CRL이 없는 임시 CA fixture는 revocation 상태가 unknown으로 거부되므로 이 검증 환경은 OpenSSL backend를 사용한다. 인증서·호스트 이름 검증 옵션은 활성 상태로 유지한다.
 
 ```powershell
-$env:IISERVERHOST_TEST_RCLONE = Join-Path $workspace 'Tools/Rclone/rclone-v1.75.2-windows-amd64/rclone.exe'
-$env:IISERVERHOST_TEST_FTP_PYTHON = Join-Path $workspace 'Tools/PythonServerHost/Scripts/python.exe'
+$env:IIWEBSERVER_TEST_RCLONE = Join-Path $workspace 'Tools/Rclone/rclone-v1.75.2-windows-amd64/rclone.exe'
+$env:IIWEBSERVER_TEST_FTP_PYTHON = Join-Path $workspace 'Tools/PythonServerHost/Scripts/python.exe'
 $env:PYTHONPATH = (Join-Path $workspace 'Tools/python-serverhost') + ';' + $env:PYTHONPATH
 $env:CURL_SSL_BACKEND = 'openssl'
 ```
@@ -119,7 +119,7 @@ if ($LASTEXITCODE -ne 0) { throw '프로토콜 검사 의존성 설치 실패' }
 
 Windows의 외부 저장소 backend는 rclone에 빈 설정을 전달할 때 `NUL`을 사용한다. Qt의 Win32 장치 경로는 Go의 설정 경로 정규화에서 거부된다. 설정 파일과 런타임 디렉터리는 Windows DACL을 조회하여 Everyone·Authenticated Users·Users의 공개 읽기/쓰기 권한을 거부한다. 검사에서는 실제 Everyone 읽기 ACE를 추가한 설정 파일이 거절되는지 확인한다.
 
-FTP Python adapter의 native DLL 옆에는 SQLite DLL도 배치한다. 현재 Python의 `ctypes`는 종속 DLL을 일반 `PATH`만으로 검색하지 않으므로 `iiServerHostProviderRuntime`이 두 파일을 같은 `build/lib`에 준비한다. TLS FTP 검사는 개발자 설치 경로 관련 환경변수를 제거한 상태에서 파일 생성·추가·이름 변경과 Unicode 전송을 실행한다.
+FTP Python adapter의 native DLL 옆에는 SQLite DLL도 배치한다. 현재 Python의 `ctypes`는 종속 DLL을 일반 `PATH`만으로 검색하지 않으므로 `iiWebServerProviderRuntime`이 두 파일을 같은 `build/lib`에 준비한다. TLS FTP 검사는 개발자 설치 경로 관련 환경변수를 제거한 상태에서 파일 생성·추가·이름 변경과 Unicode 전송을 실행한다.
 
 외부 저장소 프로세스는 Windows Job Object에 연결하며 마지막 job handle이 닫힐 때 종료한다. 부모 host가 강제로 종료되어도 rclone/FTP 자식과 수신 포트가 남지 않아야 하며, 실제 프로토콜 검사가 이를 확인한다.
 
@@ -134,7 +134,7 @@ ctest --test-dir build -C Release --output-on-failure --parallel 1 --no-tests=er
 if ($LASTEXITCODE -ne 0) { throw '전체 실행 검사 실패' }
 ```
 
-현재 빌드에 실제 등록된 실행 경로의 예는 `iiServerHost.lan`, `iiServerHost.hosting`, `iiServerHost.pairing`이다. 전체 목록은 `ctest --test-dir build -N`으로 확인한다.
+현재 빌드에 실제 등록된 실행 경로의 예는 `iiWebServer.lan`, `iiWebServer.hosting`, `iiWebServer.pairing`이다. 전체 목록은 `ctest --test-dir build -N`으로 확인한다.
 
 ## 설치와 배포 범위
 

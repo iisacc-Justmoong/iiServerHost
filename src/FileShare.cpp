@@ -1,7 +1,7 @@
 #include <iiFileProviderStorage.h>
 #include <iiFileProviderPresentation.h>
 #include <iiFileProviderDevice.h>
-#include "ServerHost.h"
+#include "WebServer.h"
 #include "Protocol.h"
 #include <QDir>
 #include <QFileInfo>
@@ -13,13 +13,13 @@
 #include <unistd.h>
 #endif
 
-namespace iiServerHost {
+namespace iiWebServer {
 namespace {
 bool relative(const QString &path) {
     if (path.size() > 4096 || !path.isValidUtf16() || QDir::isAbsolutePath(path) || path.contains('\\') || path.contains(':') || path.contains(QChar::Null)) return false;
     if (path.isEmpty()) return true;
     for (const auto &part : path.split('/'))
-        if (part.isEmpty() || part == "." || part == ".." || part.startsWith(".iiserverhost-")
+        if (part.isEmpty() || part == "." || part == ".." || part.startsWith(".iiwebserver-")
             || iiFileProvider::native::Presentation::isControlFile(std::filesystem::path(part.toStdU16String()))) return false;
     return true;
 }
@@ -131,7 +131,7 @@ QJsonObject FileShare::handle(const QJsonObject &request) const {
         if (encoded.size() > ((ChunkBytes + 2) / 3) * 4) return protocol::error("write_too_large");
         const auto decoded = QByteArray::fromBase64Encoding(encoded, QByteArray::AbortOnBase64DecodingErrors);
         if (!request.value("data").isString() || !decoded || decoded.decoded.size() > ChunkBytes) return protocol::error("invalid_data");
-        const auto temporary = QByteArray(".iiserverhost-") + protocol::uuid().toLatin1();
+        const auto temporary = QByteArray(".iiwebserver-") + protocol::uuid().toLatin1();
         Fd fd(iiFileProvider::native::openFileAt(directory.value, temporary.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
         if (fd.value < 0) return protocol::error("write_failed");
         qint64 written = 0;

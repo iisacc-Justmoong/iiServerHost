@@ -1,10 +1,10 @@
 #pragma once
-#include "ServerHost.h"
+#include "WebServer.h"
 #include <QStringList>
 
-namespace iiServerHost {
+namespace iiWebServer {
 // A local-only, untrusted QR payload. It contains no account credential.
-struct IISERVERHOST_EXPORT LanLink {
+struct IIWEBSERVER_EXPORT LanLink {
     QStringList addresses;
     quint16 port = 0;
     QString hostId, name, fingerprint, code;
@@ -14,14 +14,14 @@ struct IISERVERHOST_EXPORT LanLink {
     static bool localAddress(const QString &address);
 };
 
-class IISERVERHOST_EXPORT LanPeer final : public QObject {
+class IIWEBSERVER_EXPORT LanPeer final : public QObject {
     Q_OBJECT
 public:
     explicit LanPeer(QObject *parent = nullptr);
     ~LanPeer() override;
     // Desktop only. Empty addresses enumerate active Wi-Fi/Ethernet interfaces.
     bool startHost(QString hostId, QString name, RequestHandler handler,
-                   QStringList addresses = {}, QHostAddress bindAddress = QHostAddress::AnyIPv4);
+                   QStringList addresses = {}, Address bindAddress = Address::any());
     QString createOffer(int lifetimeSeconds = 60);
     // Discovery offers bind a candidate and require a human comparison of the
     // TLS-bound code before the host exposes any Files metadata or bytes.

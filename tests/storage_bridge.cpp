@@ -7,7 +7,7 @@
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 class StorageBridgeTests : public QObject {
     Q_OBJECT
 private slots:
@@ -23,8 +23,8 @@ static StorageResult run(StorageBridge &bridge, const StorageRequest &request) {
     return qvariant_cast<StorageResult>(spy[0][1]);
 }
 void StorageBridgeTests::actualCatalogueAndFileOperations() {
-    const auto executable = qEnvironmentVariable("IISERVERHOST_TEST_RCLONE");
-    if (executable.isEmpty()) QSKIP("Set IISERVERHOST_TEST_RCLONE for real backend integration tests");
+    const auto executable = qEnvironmentVariable("IIWEBSERVER_TEST_RCLONE");
+    if (executable.isEmpty()) QSKIP("Set IIWEBSERVER_TEST_RCLONE for real backend integration tests");
     QTemporaryDir dir(QString(TEST_DIRECTORY) + "/storage-XXXXXX");
     QVERIFY(dir.isValid());
     StorageBridge bridge({executable, {}, {}, dir.path()});
@@ -57,7 +57,7 @@ void StorageBridgeTests::rejectUnsafeConfiguration() {
     QTemporaryDir dir(QString(TEST_DIRECTORY) + "/storage-XXXXXX");
     StorageBridge missing({dir.filePath("missing-rclone"), {}, {}, dir.path()});
     QCOMPARE(run(missing, {StorageOperation::Providers}).error, "backend_unavailable");
-    const auto executable = qEnvironmentVariable("IISERVERHOST_TEST_RCLONE");
+    const auto executable = qEnvironmentVariable("IIWEBSERVER_TEST_RCLONE");
     if (executable.isEmpty()) return;
     StorageBridge bridge({executable, {}, {}, dir.path()});
     QCOMPARE(run(bridge, {StorageOperation::List, "--config=/private/file"}).error, "invalid_location");
@@ -74,15 +74,15 @@ void StorageBridgeTests::rejectUnsafeConfiguration() {
     QCOMPARE(run(unsafe, {StorageOperation::Providers}).error, "private_config_required");
 }
 void StorageBridgeTests::serverRequiresAuthentication() {
-    const auto executable = qEnvironmentVariable("IISERVERHOST_TEST_RCLONE");
-    if (executable.isEmpty()) QSKIP("Set IISERVERHOST_TEST_RCLONE");
+    const auto executable = qEnvironmentVariable("IIWEBSERVER_TEST_RCLONE");
+    if (executable.isEmpty()) QSKIP("Set IIWEBSERVER_TEST_RCLONE");
     QTemporaryDir dir(QString(TEST_DIRECTORY) + "/storage-XXXXXX");
     QVERIFY(QDir(dir.path()).mkdir("files"));
     FileProtocolServer server({executable, {}, {}, dir.path()});
     FileServerOptions options;
     options.root = dir.filePath("files"); options.port = 19876; options.protocol = FileServerProtocol::WebDav;
     QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "authentication_required");
-    options.username = "account"; options.password = "password"; options.address = QHostAddress::AnyIPv4;
+    options.username = "account"; options.password = "password"; options.address = Address::any();
     QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "cleartext_disabled");
     options.protocol = FileServerProtocol::WebDavs;
     QVERIFY(!server.start(options)); QCOMPARE(server.errorString(), "tls_identity_required");

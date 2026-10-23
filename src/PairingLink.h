@@ -1,11 +1,11 @@
 #pragma once
-#include "iiServerHostExport.h"
+#include "iiWebServerExport.h"
 #include <QUrl>
 #include <QString>
 
-namespace iiServerHost {
+namespace iiWebServer {
 // An untrusted QR payload. Parsing never opens a URL or supplies credentials.
-struct IISERVERHOST_EXPORT PairingLink {
+struct IIWEBSERVER_EXPORT PairingLink {
     QUrl relayUrl;
     QString hostId;
     QString code;

@@ -1,29 +1,27 @@
-#include "ServerHost.h"
+#include "WebServer.h"
 #include "Protocol.h"
 #include <QCryptographicHash>
-#include <QNetworkInterface>
 #include <QPointer>
-#include <QSslError>
 #include <QTimer>
 #include <QTimeZone>
 
-namespace iiServerHost {
+namespace iiWebServer {
 using namespace protocol;
 class Peer::Private {
 public:
-    struct Pending { QString peer; QJsonObject payload; QString transport; QPointer<QWebSocket> socket; QDateTime deadline; };
+    struct Pending { QString peer; QJsonObject payload; QString transport; QPointer<WebSocket> socket; QDateTime deadline; };
     struct Ticket { QString peer; QDateTime expires; };
     struct Link { QString peer, ticket, fingerprint; QDateTime expires, deadline; bool outgoing = false, authenticated = false; };
     struct Attempt { QStringList urls; QString ticket, fingerprint; QDateTime expires; };
     Peer *q;
     PeerOptions options;
     RequestHandler handler;
-    QWebSocket relay;
-    std::unique_ptr<QWebSocketServer> server;
+    WebSocket relay;
+    std::unique_ptr<WebSocketServer> server;
     QHash<QString, Pending> requests;
     QHash<QString, Ticket> tickets;
-    QHash<QWebSocket *, Link> links;
-    QHash<QString, QPointer<QWebSocket>> outbound;
+    QHash<WebSocket *, Link> links;
+    QHash<QString, QPointer<WebSocket>> outbound;
     QHash<QString, Attempt> attempts;
     QSet<QString> connecting;
     QTimer timer, retry, authTimer;
@@ -32,34 +30,30 @@ public:
     bool running = false, ready = false, fatal = false;
     int backoff = 1000;
     explicit Private(Peer *owner) : q(owner) {
-        limits(&relay);
+
         timer.setInterval(100); retry.setSingleShot(true); authTimer.setInterval(30000);
         QObject::connect(&timer, &QTimer::timeout, q, [this] { sweep(); });
         QObject::connect(&retry, &QTimer::timeout, q, [this] { openRelay(); });
         QObject::connect(&authTimer, &QTimer::timeout, q, [this] { authenticate(); });
-        QObject::connect(&relay, &QWebSocket::connected, q, [this] { authenticate(); authTimer.start(); });
-        QObject::connect(&relay, &QWebSocket::sslErrors, q, [this](const QList<QSslError> &errors) {
-            QStringList messages; for (const auto &e : errors) messages.append(e.errorString());
-            error = messages.join("; "); emit q->stateChanged();
-        });
-        QObject::connect(&relay, &QWebSocket::errorOccurred, q, [this] {
+        QObject::connect(&relay, &WebSocket::connected, q, [this] { authenticate(); authTimer.start(); });
+        QObject::connect(&relay, &WebSocket::errorOccurred, q, [this] {
             if (!running) return;
             if (error.isEmpty()) error = relay.errorString(); emit q->stateChanged(); scheduleReconnect();
         });
-        QObject::connect(&relay, &QWebSocket::disconnected, q, [this] {
+        QObject::connect(&relay, &WebSocket::disconnected, q, [this] {
             authTimer.stop(); ready = false; directory = {}; account.clear();
             resetLocal();
             for (const auto &id : requests.keys()) finish(id, protocol::error("connection_lost"));
             emit q->stateChanged(); emit q->peersChanged(); scheduleReconnect();
         });
-        QObject::connect(&relay, &QWebSocket::textMessageReceived, q, [this](const QString &m) { message(parse(m)); });
+        QObject::connect(&relay, &WebSocket::textMessageReceived, q, [this](const QString &m) { message(parse(m)); });
     }
     void scheduleReconnect() {
         if (running && !fatal && !retry.isActive()) { retry.start(backoff); backoff = qMin(backoff * 2, 30000); }
     }
     void openRelay() {
         if (!running) return;
-        relay.setSslConfiguration(options.relayTls);
+        relay.setTlsConfiguration(options.relayTls);
         relay.open(options.relayUrl);
     }
     void authenticate() { send(&relay, {{"type", "auth"}, {"credential", QString::fromUtf8(options.credential)}}); }
@@ -80,7 +74,7 @@ public:
             if (!send(&relay, {{"type", "request"}, {"id", id}, {"peerId", peer}, {"payload", r.payload}})) finish(id, protocol::error("connection_lost"));
         }
     }
-    void local(QWebSocket *socket) {
+    void local(WebSocket *socket) {
         if (!links.contains(socket) || !links[socket].authenticated) return;
         const auto peer = links[socket].peer;
         connecting.remove(peer); attempts.remove(peer);
@@ -105,13 +99,23 @@ public:
         }
     }
     bool onLink(const QUrl &url) const {
-        const QHostAddress address(url.host());
-        if (address.isNull() || address.isMulticast() || address == QHostAddress::Broadcast || address == QHostAddress::AnyIPv4) return false;
-        if (address.isLoopback()) return loopback(options.relayUrl.host());
-        for (const auto &interface : QNetworkInterface::allInterfaces())
-            if (interface.flags().testFlag(QNetworkInterface::IsUp))
-                for (const auto &entry : interface.addressEntries())
-                    if (entry.prefixLength() > 0 && address.isInSubnet(entry.ip(), entry.prefixLength()) && address != entry.broadcast()) return true;
+        const auto address = Address::parse(url.host().toStdString());
+        if (!address || address->is_multicast() || address->is_unspecified() || address->string() == "255.255.255.255") return false;
+        if (address->is_loopback()) return loopback(options.relayUrl.host());
+        for (const auto &entry : ii::network::interfaces()) {
+            const auto own = Address::parse(entry.address);
+            if (!own || !entry.prefix_length) continue;
+            const auto subnet = ii::network::IpSubnet{*own, entry.prefix_length};
+            if (subnet.contains(*address)) {
+                if (address->family() == ii::network::AddressFamily::ipv4 && entry.prefix_length < 32) {
+                    const auto &bytes = address->bytes();
+                    const auto host = (std::uint32_t(bytes[0]) << 24) | (std::uint32_t(bytes[1]) << 16) | (std::uint32_t(bytes[2]) << 8) | bytes[3];
+                    const auto mask = std::uint32_t(0xffffffffu >> entry.prefix_length);
+                    if ((host & mask) == mask) continue;
+                }
+                return true;
+            }
+        }
         return false;
     }
     void nextLocal(const QString &peer) {
@@ -119,30 +123,24 @@ public:
         auto &a = attempts[peer];
         if (a.urls.isEmpty() || a.expires <= QDateTime::currentDateTimeUtc()) { remote(peer); return; }
         const QUrl url(a.urls.takeFirst());
-        auto *s = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, q); limits(s);
+        auto *s = new WebSocket(q);
         links.insert(s, {peer, a.ticket, a.fingerprint, a.expires, QDateTime::currentDateTimeUtc().addMSecs(options.localTimeoutMs), true, false});
         outbound.insert(peer, s);
-        QObject::connect(s, &QWebSocket::sslErrors, q, [this, s](const QList<QSslError> &errors) {
+        if (url.scheme() == "wss") {
+            TlsConfiguration tls;
+            if (!pinCertificate(tls, a.fingerprint)) { lost(s); return; }
+            s->setTlsConfiguration(std::move(tls));
+        }
+        QObject::connect(s, &WebSocket::connected, q, [this, s, url] {
             if (!links.contains(s)) return;
-            const auto cert = s->sslConfiguration().peerCertificate();
-            if (QString::fromLatin1(cert.digest(QCryptographicHash::Sha256).toHex()) != links[s].fingerprint
-                || cert.effectiveDate() > QDateTime::currentDateTimeUtc() || cert.expiryDate() <= QDateTime::currentDateTimeUtc()) return;
-            for (const auto &error : errors)
-                if (error.error() != QSslError::SelfSignedCertificate && error.error() != QSslError::SelfSignedCertificateInChain
-                    && error.error() != QSslError::HostNameMismatch && error.error() != QSslError::UnableToGetLocalIssuerCertificate
-                    && error.error() != QSslError::UnableToVerifyFirstCertificate && error.error() != QSslError::CertificateUntrusted) return;
-            s->ignoreSslErrors(errors); // Only the account-directory pin above grants trust.
-        });
-        QObject::connect(s, &QWebSocket::connected, q, [this, s, url] {
-            if (!links.contains(s)) return;
-            if (url.scheme() == "wss" && QString::fromLatin1(s->sslConfiguration().peerCertificate().digest(QCryptographicHash::Sha256).toHex()) != links[s].fingerprint) { s->abort(); return; }
+            if (url.scheme() == "wss" && s->peerCertificateFingerprint() != links[s].fingerprint) { s->abort(); return; }
             send(s, {{"type", "hello"}, {"ticket", links[s].ticket}});
         });
         attach(s);
-        QObject::connect(s, &QWebSocket::errorOccurred, q, [this, s] { lost(s); });
+        QObject::connect(s, &WebSocket::errorOccurred, q, [this, s] { lost(s); });
         s->open(url);
     }
-    void lost(QWebSocket *s) {
+    void lost(WebSocket *s) {
         if (!links.contains(s)) return;
         const auto l = links.take(s);
         if (outbound.value(l.peer) == s) outbound.remove(l.peer);
@@ -154,10 +152,10 @@ public:
         if (!ready || !options.hostFiles || !handler) return protocol::error("not_hosting");
         try { return handler(peer, payload); } catch (...) { return protocol::error("host_error"); }
     }
-    void attach(QWebSocket *s) {
-        QObject::connect(s, &QWebSocket::disconnected, q, [this, s] { lost(s); });
-        QObject::connect(s, &QWebSocket::binaryMessageReceived, s, [s] { s->close(); });
-        QObject::connect(s, &QWebSocket::textMessageReceived, q, [this, s](const QString &text) {
+    void attach(WebSocket *s) {
+        QObject::connect(s, &WebSocket::disconnected, q, [this, s] { lost(s); });
+        QObject::connect(s, &WebSocket::binaryMessageReceived, s, [s] { s->close(); });
+        QObject::connect(s, &WebSocket::textMessageReceived, q, [this, s](const QString &text) {
             if (!links.contains(s)) return;
             auto &l = links[s]; const auto m = parse(text); const auto type = m.value("type").toString();
             if (!l.authenticated) {
@@ -167,7 +165,7 @@ public:
                     const auto t = tickets.take(ticket); l.peer = t.peer; l.expires = t.expires; l.authenticated = true;
                     send(s, {{"type", "hello"}, {"ok", true}}); return;
                 }
-                s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Ticket required"); return;
+                s->close(1008, "Ticket required"); return;
             }
             if (!ready || l.expires <= QDateTime::currentDateTimeUtc()) { s->close(); return; }
             if (type == "request" && !l.outgoing && identifier(m.value("id").toString()) && m.value("payload").isObject()) {
@@ -176,20 +174,19 @@ public:
             }
             const auto id = m.value("id").toString();
             if (type == "response" && l.outgoing && requests.contains(id) && requests[id].socket == s) { finish(id, m.value("result").toObject()); return; }
-            s->close(QWebSocketProtocol::CloseCodeProtocolError, "Invalid local message");
+            s->close(1002, "Invalid local message");
         });
     }
     QJsonArray localUrls() const {
         QJsonArray result; if (!server) return result;
         auto addresses = options.localAddresses;
         if (addresses.isEmpty()) {
-            if (options.listenAddress.isLoopback()) addresses.append(options.listenAddress.toString());
-            else for (const auto &interface : QNetworkInterface::allInterfaces())
-                if (interface.flags().testFlag(QNetworkInterface::IsUp) && !interface.flags().testFlag(QNetworkInterface::IsLoopBack))
-                    for (const auto &entry : interface.addressEntries()) if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) addresses.append(entry.ip().toString());
+            if (options.listenAddress.is_loopback()) addresses.append(QString::fromStdString(options.listenAddress.string()));
+            else for (const auto &entry : ii::network::interfaces())
+                if (!entry.loopback && entry.family == ii::network::AddressFamily::ipv4) addresses.append(QString::fromStdString(entry.address));
         }
         for (const auto &address : addresses) {
-            QUrl url; url.setScheme(options.localTls.localCertificate().isNull() ? "ws" : "wss");
+            QUrl url; url.setScheme(!hasIdentity(options.localTls) ? "ws" : "wss");
             url.setHost(address); url.setPort(server->serverPort()); result.append(url.toString());
         }
         return result;
@@ -200,7 +197,7 @@ public:
             account = m.value("accountId").toString();
             send(&relay, {{"type", "register"}, {"peerId", options.peerId}, {"name", options.name},
                 {"service", options.service}, {"host", options.hostFiles}, {"metadata", options.metadata}, {"localUrls", localUrls()},
-                {"fingerprint", QString::fromLatin1(options.localTls.localCertificate().digest(QCryptographicHash::Sha256).toHex())}}); return;
+                {"fingerprint", certificateFingerprint(options.localTls)}}); return;
         }
         if (type == "registered") { ready = true; backoff = 1000; error.clear(); emit q->stateChanged(); return; }
         if (type == "error") { error = m.value("error").toString(); fatal = true; emit q->stateChanged(); return; }
@@ -256,9 +253,9 @@ bool Peer::start(const PeerOptions &options, RequestHandler handler) {
     if (options.localEnabled && options.localHostingEnabled && options.hostFiles) {
         d->server = listener(options.listenAddress, options.localPort, options.localTls, d->error);
         if (!d->server) { emit stateChanged(); return false; }
-        connect(d->server.get(), &QWebSocketServer::newConnection, this, [this] {
+        connect(d->server.get(), &WebSocketServer::newConnection, this, [this] {
             while (d->server->hasPendingConnections()) {
-                auto *s = d->server->nextPendingConnection(); s->setParent(this); limits(s);
+                auto *s = d->server->nextPendingConnection(); s->setParent(this);
                 if (d->links.size() >= 64) { s->close(); s->deleteLater(); continue; }
                 Private::Link link; link.deadline = QDateTime::currentDateTimeUtc().addSecs(5);
                 d->links.insert(s, link); d->attach(s);

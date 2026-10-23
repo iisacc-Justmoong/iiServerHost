@@ -1,12 +1,12 @@
 #pragma once
 
-#include "iiServerHostExport.h"
+#include "iiWebServerExport.h"
 #include <QtCore/QObject>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
 #include <memory>
 
-namespace iiServerHost {
+namespace iiWebServer {
 
 enum class TransferOperation { Download, Upload, List };
 
@@ -54,7 +54,7 @@ struct TransferResult {
 
 /// Owner-thread API; each transfer runs independently of the Qt UI event loop.
 /// Up to four active transfers; every start returns an ID and completes asynchronously once.
-class IISERVERHOST_EXPORT FileTransfer final : public QObject {
+class IIWEBSERVER_EXPORT FileTransfer final : public QObject {
     Q_OBJECT
 public:
     explicit FileTransfer(QObject *parent = nullptr);
@@ -67,11 +67,11 @@ public:
     int activeCount() const;
 signals:
     void progress(QString id, qint64 bytes, qint64 total);
-    void finished(QString id, iiServerHost::TransferResult result);
+    void finished(QString id, iiWebServer::TransferResult result);
 private:
     struct Impl;
     std::unique_ptr<Impl> d;
 };
 
-} // namespace iiServerHost
-Q_DECLARE_METATYPE(iiServerHost::TransferResult)
+} // namespace iiWebServer
+Q_DECLARE_METATYPE(iiWebServer::TransferResult)

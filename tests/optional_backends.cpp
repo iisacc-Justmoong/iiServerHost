@@ -1,4 +1,4 @@
-#include "iiServerHost.h"
+#include "iiWebServer.h"
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
@@ -6,7 +6,7 @@ class OptionalBackendTests : public QObject {
     Q_OBJECT
 private slots:
     void featureConfigurationMatchesLinkedArtifact() {
-        using namespace iiServerHost;
+        using namespace iiWebServer;
         QCOMPARE(!FileTransfer::backendVersion().isEmpty(), bool(TEST_CURL_ENABLED));
         QCOMPARE(!FileTransfer::protocols().isEmpty(), bool(TEST_CURL_ENABLED));
         if (!TEST_CURL_ENABLED) {
@@ -17,7 +17,7 @@ private slots:
             QCOMPARE(qvariant_cast<TransferResult>(finished[0][1]).error, "backend_unavailable");
         }
         StorageBridgeOptions backend;
-        backend.executable = "/nonexistent/iiServerHost-fixture-rclone";
+        backend.executable = "/nonexistent/iiWebServer-fixture-rclone";
         StorageBridge storage(backend);
         QSignalSpy finished(&storage, &StorageBridge::finished);
         storage.start({StorageOperation::Providers});

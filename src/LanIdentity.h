@@ -1,5 +1,6 @@
 #pragma once
-#include <QSslConfiguration>
-namespace iiServerHost {
-QSslConfiguration createLanIdentity(const QStringList &addresses);
+#include "NetworkTypes.h"
+#include <QStringList>
+namespace iiWebServer {
+TlsConfiguration createLanIdentity(const QStringList &addresses);
 }

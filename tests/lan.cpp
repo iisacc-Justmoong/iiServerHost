@@ -1,14 +1,23 @@
-#include <iiServerHost.h>
+#include <NetworkTransport.h>
+#include <iiWebServer.h>
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include "../src/BinaryFrame.h"
-#include <QWebSocket>
-#include <QSslError>
 #include <QMessageAuthenticationCode>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
+namespace {
+TlsConfiguration trustCertificate(const QString &fingerprint) {
+    TlsConfiguration result; const auto bytes = QByteArray::fromHex(fingerprint.toLatin1());
+    if (bytes.size() == 32) {
+        std::array<unsigned char, 32> pin{}; std::copy(bytes.begin(), bytes.end(), pin.begin());
+        result.policy.trusted_certificate_sha256 = pin;
+    }
+    return result;
+}
+}
 class LanTests : public QObject {
     Q_OBJECT
 private slots:
@@ -32,7 +41,7 @@ private slots:
         if (!clientKey.isEmpty()) authenticate(client, clientKey);
         QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
             ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         QVERIFY(client.join(host.createOffer(), "phone", "Phone"));
         if (clientKey == "account-one") { QTRY_VERIFY(client.connected()); QCOMPARE(reads, 1); }
         else { QTRY_COMPARE(client.phase(), QString("error")); QCOMPARE(reads, 0); QVERIFY(host.pairedDeviceIds().isEmpty()); }
@@ -43,7 +52,7 @@ private slots:
             [](const QByteArray &, const QJsonObject &) { return false; });
         QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) {
             return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         QVERIFY(client.join(host.createOffer(), "phone", "Phone"));
         QTRY_COMPARE(client.phase(), QString("error")); QVERIFY(!client.connected());
         QTRY_VERIFY(host.pairedDeviceIds().isEmpty());
@@ -74,7 +83,7 @@ private slots:
             const auto data = request.value("message").toObject().value("data").toString();
             if (QByteArray::fromBase64(data.toLatin1()) == bytes) ++chunks;
             return QJsonObject{{"ok", true}, {"result", QJsonObject{{"ok", true}, {"data", data}}}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         QVERIFY(client.join(host.createOffer(), "phone", "Phone")); QTRY_VERIFY(client.connected()); QVERIFY(client.binaryTransferEnabled());
         QSignalSpy completed(&client, &LanPeer::completed);
         for (int i = 0; i < 4; ++i) QVERIFY(!client.request("desktop", {{"op", "society.sync"},
@@ -86,15 +95,15 @@ private slots:
         LanPeer host; int reads = 0;
         QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
             ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         LanLink offer; QVERIFY(LanLink::decode(host.createOffer(), &offer));
-        QWebSocket unpaired; QSignalSpy disconnected(&unpaired, &QWebSocket::disconnected);
-        connect(&unpaired, &QWebSocket::sslErrors, &unpaired, [&](const QList<QSslError> &errors) { unpaired.ignoreSslErrors(errors); });
-        connect(&unpaired, &QWebSocket::connected, &unpaired, [&] {
+        WebSocket unpaired; QSignalSpy disconnected(&unpaired, &WebSocket::disconnected);
+        connect(&unpaired, &WebSocket::connected, &unpaired, [&] {
             const auto frame = protocol::BinaryFrame::encode({{"type", "request"}, {"id", "unpaired"},
                 {"payload", QJsonObject{{"message", QJsonObject{{"data", "YWJj"}}}}}});
             QVERIFY(!frame.isEmpty()); unpaired.sendBinaryMessage(frame);
         });
+        unpaired.setTlsConfiguration(trustCertificate(offer.fingerprint));
         unpaired.open(QUrl("wss://127.0.0.1:" + QString::number(offer.port)));
         QTRY_COMPARE(disconnected.size(), 1); QCOMPARE(reads, 0); QVERIFY(host.pairedDeviceIds().isEmpty());
     }
@@ -103,18 +112,18 @@ private slots:
         QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &request) {
             return request.value("op") == "list" ? QJsonObject{{"ok", true}, {"entries", QJsonArray()}}
                 : QJsonObject{{"ok", true}, {"data", QString::fromLatin1(bytes.toBase64())}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         LanLink offer; QVERIFY(LanLink::decode(host.createOffer(), &offer));
-        QWebSocket old; QSignalSpy binary(&old, &QWebSocket::binaryMessageReceived); bool paired = false, received = false;
+        WebSocket old; QSignalSpy binary(&old, &WebSocket::binaryMessageReceived); bool paired = false, received = false;
         const auto send = [&](const QJsonObject &value) { old.sendTextMessage(QString::fromUtf8(QJsonDocument(value).toJson(QJsonDocument::Compact))); };
-        connect(&old, &QWebSocket::sslErrors, &old, [&](const QList<QSslError> &errors) { old.ignoreSslErrors(errors); });
-        connect(&old, &QWebSocket::connected, &old, [&] { send({{"type", "pair"}, {"host", "desktop"}, {"code", offer.code}, {"peerId", "old"}, {"name", "Old"}}); });
-        connect(&old, &QWebSocket::textMessageReceived, &old, [&](const QString &text) {
+        connect(&old, &WebSocket::connected, &old, [&] { send({{"type", "pair"}, {"host", "desktop"}, {"code", offer.code}, {"peerId", "old"}, {"name", "Old"}}); });
+        connect(&old, &WebSocket::textMessageReceived, &old, [&](const QString &text) {
             const auto value = QJsonDocument::fromJson(text.toUtf8()).object();
             if (value.value("type") == "ready") send({{"type", "confirm"}});
             if (value.value("type") == "paired") { paired = true; send({{"type", "request"}, {"id", "request"}, {"payload", QJsonObject{{"op", "read"}}}}); }
             if (value.value("type") == "response") received = QByteArray::fromBase64(value.value("result").toObject().value("data").toString().toLatin1()) == bytes;
         });
+        old.setTlsConfiguration(trustCertificate(offer.fingerprint));
         old.open(QUrl("wss://127.0.0.1:" + QString::number(offer.port)));
         QTRY_VERIFY(paired && received); QCOMPARE(binary.size(), 0);
     }
@@ -123,7 +132,7 @@ private slots:
         int reads = 0;
         QVERIFY(host.startHost("desktop", "Desktop", [&](const auto &, const auto &) {
             ++reads; return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         const auto offer = host.createDeviceOffer("phone"); QVERIFY(!offer.isEmpty());
         QVERIFY(wrong.join(offer, "other", "Other")); QTRY_COMPARE(wrong.phase(), "error");
         QCOMPARE(reads, 0);
@@ -142,7 +151,7 @@ private slots:
         LanPeer host, client;
         QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) {
             return QJsonObject{{"ok", true}, {"entries", QJsonArray()}};
-        }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        }, {"127.0.0.1"}, Address::loopback()));
         QVERIFY(client.join(host.createDeviceOffer("phone"), "phone", "Phone"));
         QTRY_COMPARE(host.phase(), "confirming"); host.cancelPairing();
         QTRY_COMPARE(client.phase(), "error"); QVERIFY(!client.connected());
@@ -164,7 +173,7 @@ private slots:
         QTemporaryDir root(TEST_DIRECTORY "/lan-XXXXXX");
         QFile file(root.filePath("hello.txt")); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("local bytes"); file.close();
         FileShare share(root.path()); LanPeer host, client, replay;
-        QVERIFY(host.startHost("desktop", "My Desktop", [&](const auto &, const auto &r) { return share.handle(r); }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(host.startHost("desktop", "My Desktop", [&](const auto &, const auto &r) { return share.handle(r); }, {"127.0.0.1"}, Address::loopback()));
         const auto qr = host.createOffer(); QVERIFY(!qr.isEmpty());
         QSignalSpy h(&host, &LanPeer::paired), c(&client, &LanPeer::paired);
         QVERIFY(client.join(qr, "phone", "My iPhone"));
@@ -183,7 +192,7 @@ private slots:
     }
     void certificatePinMismatchNeverPairs() {
         LanPeer host, client;
-        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) { return QJsonObject{{"ok", true}, {"entries", QJsonArray()}}; }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) { return QJsonObject{{"ok", true}, {"entries", QJsonArray()}}; }, {"127.0.0.1"}, Address::loopback()));
         LanLink link; QVERIFY(LanLink::decode(host.createOffer(), &link)); link.fingerprint = QString(64, '0');
         QSignalSpy paired(&host, &LanPeer::paired); QVERIFY(client.join(link.encode(), "phone", "Phone"));
         QTRY_COMPARE(client.phase(), "error"); QVERIFY(!client.connected()); QCOMPARE(paired.size(), 0);
@@ -191,7 +200,7 @@ private slots:
     }
     void cancellationExpiryAndFilesFailure() {
         LanPeer host, client;
-        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) { return QJsonObject{{"ok", false}, {"error", "container_unavailable"}}; }, {"127.0.0.1"}, QHostAddress::LocalHost));
+        QVERIFY(host.startHost("desktop", "Desktop", [](const auto &, const auto &) { return QJsonObject{{"ok", false}, {"error", "container_unavailable"}}; }, {"127.0.0.1"}, Address::loopback()));
         const auto cancelled = host.createOffer(); host.cancelPairing();
         QVERIFY(client.join(cancelled, "phone", "Phone")); QTRY_COMPARE(client.phase(), "error");
         auto qr = host.createOffer(1); QTRY_VERIFY(host.qrText().isEmpty());

@@ -1,9 +1,9 @@
-#include <iiServerHost.h>
+#include <iiWebServer.h>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUrlQuery>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 namespace {
 PeerOptions options(quint16 port, QString id, QByteArray account = "alice", bool host = false) {
     PeerOptions o; o.relayUrl = QUrl(QString("ws://127.0.0.1:%1").arg(port));
@@ -41,7 +41,7 @@ private slots:
     }
     void oneUsePairingNeedsClientConfirmation() {
         RelayServer relay([](const auto &account, AuthCompletion done) { done({QString::fromUtf8(account), QDateTime::currentDateTimeUtc().addSecs(60)}); });
-        QVERIFY(relay.listen(QHostAddress::LocalHost));
+        QVERIFY(relay.listen(Address::loopback()));
         Peer host, client, other, stranger;
         QVERIFY(host.start(options(relay.port(), "Desktop", "alice", true), [](const auto &, const auto &) { return QJsonObject{{"ok", true}}; }));
         QVERIFY(client.start(options(relay.port(), "iPhone")));
@@ -74,7 +74,7 @@ private slots:
     }
     void cancellationRotationAndHostDisconnectInvalidateOffers() {
         RelayServer relay([](const auto &, AuthCompletion done) { done({"alice", QDateTime::currentDateTimeUtc().addSecs(60)}); });
-        QVERIFY(relay.listen(QHostAddress::LocalHost)); Peer host, client;
+        QVERIFY(relay.listen(Address::loopback())); Peer host, client;
         QVERIFY(host.start(options(relay.port(), "host", "alice", true)));
         QVERIFY(client.start(options(relay.port(), "client")));
         QTRY_VERIFY(host.isReady() && client.isReady());
@@ -94,7 +94,7 @@ private slots:
     }
     void clientsCannotOfferAndAttemptsAreLimited() {
         RelayServer relay([](const auto &, AuthCompletion done) { done({"alice", QDateTime::currentDateTimeUtc().addSecs(60)}); });
-        QVERIFY(relay.listen(QHostAddress::LocalHost)); Peer client;
+        QVERIFY(relay.listen(Address::loopback())); Peer client;
         QVERIFY(client.start(options(relay.port(), "client"))); QTRY_VERIFY(client.isReady());
         QSignalSpy events(&client, &Peer::pairingEvent);
         const auto offer = client.createPairingOffer(); QTRY_VERIFY(!pairEvent(events, offer, "error").isEmpty());
@@ -105,7 +105,7 @@ private slots:
     }
     void expiredAuthenticationCannotCompletePairing() {
         RelayServer relay([](const auto &, AuthCompletion done) { done({"alice", QDateTime::currentDateTimeUtc().addMSecs(800)}); });
-        QVERIFY(relay.listen(QHostAddress::LocalHost)); Peer host, client;
+        QVERIFY(relay.listen(Address::loopback())); Peer host, client;
         QVERIFY(host.start(options(relay.port(), "host", "alice", true)));
         QVERIFY(client.start(options(relay.port(), "client")));
         QTRY_VERIFY(host.isReady() && client.isReady());

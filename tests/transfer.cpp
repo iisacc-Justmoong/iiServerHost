@@ -1,13 +1,12 @@
+#include "NetworkFixture.h"
 #include "Transfer.h"
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QFile>
 #include <QtCore/QTemporaryDir>
-#include <QtNetwork/QTcpServer>
-#include <QtNetwork/QTcpSocket>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 
 class TransferTests : public QObject {
     Q_OBJECT
@@ -120,13 +119,13 @@ void TransferTests::policyRejectsBeforeIO() {
 
 void TransferTests::httpErrorsRedirectsAndCancellation() {
     if (FileTransfer::backendVersion().isEmpty()) QSKIP("libcurl disabled");
-    QTcpServer server;
-    QVERIFY(server.listen(QHostAddress::LocalHost));
+    TestTcpServer server;
+    QVERIFY(server.listen(Address::loopback()));
     int requests = 0;
-    connect(&server, &QTcpServer::newConnection, this, [&] {
+    connect(&server, &TestTcpServer::newConnection, this, [&] {
         auto *socket = server.nextPendingConnection();
-        connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
-        connect(socket, &QTcpSocket::readyRead, socket, [socket, &requests] {
+        connect(socket, &TestTcpSocket::disconnected, socket, &QObject::deleteLater);
+        connect(socket, &TestTcpSocket::readyRead, socket, [socket, &requests] {
             const auto data = socket->readAll();
             if (!data.contains("\r\n\r\n")) return;
             ++requests;

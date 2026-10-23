@@ -1,4 +1,4 @@
-# File creation ownership in iiServerHost
+# File creation ownership in iiWebServer
 
 Confined uploads, streaming transfer output and platform file-share creation use provider-owned native descriptors/devices. Server routing, TLS, grants and transport validation remain here.
 

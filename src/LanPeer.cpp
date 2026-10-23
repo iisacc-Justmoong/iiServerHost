@@ -1,19 +1,17 @@
 #include "LanPeer.h"
 #include "Protocol.h"
-#ifdef IISERVERHOST_LAN_HOST
+#ifdef IIWEBSERVER_LAN_HOST
 #include "LanIdentity.h"
 #endif
 #include <QCryptographicHash>
-#include <QNetworkInterface>
 #include <QPointer>
 #include <QRandomGenerator>
-#include <QSslError>
 #include <QTimer>
 #include <QTimeZone>
 #include <QUrlQuery>
 #include <algorithm>
 
-namespace iiServerHost {
+namespace iiWebServer {
 using namespace protocol;
 namespace {
 bool hexToken(const QString &text) {
@@ -46,30 +44,20 @@ bool sameCode(const QString &a, const QString &b) {
     return diff == 0;
 }
 QStringList lanAddresses() {
-    auto interfaces = QNetworkInterface::allInterfaces();
-    std::stable_sort(interfaces.begin(), interfaces.end(), [](const auto &a, const auto &b) {
-        const auto rank = [](const auto &i) { return (i.type() == QNetworkInterface::Wifi || i.type() == QNetworkInterface::Ethernet) ? 0 : 1; };
-        return rank(a) < rank(b);
-    });
     QStringList result;
-    for (const auto &interface : interfaces) {
-        const auto flags = interface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp) || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack) || flags.testFlag(QNetworkInterface::IsPointToPoint)) continue;
-        for (const auto &entry : interface.addressEntries()) {
-            const auto text = entry.ip().toString();
-            if (!entry.ip().isLoopback() && LanLink::localAddress(text) && !result.contains(text)) result.append(text);
-        }
+    for (const auto &entry : ii::network::interfaces()) {
+        const auto text = QString::fromStdString(entry.address);
+        if (!entry.loopback && LanLink::localAddress(text) && !result.contains(text)) result.append(text);
     }
     return result.mid(0, 8);
 }
 }
 bool LanLink::localAddress(const QString &text) {
-    const QHostAddress address(text);
-    if (address.protocol() != QAbstractSocket::IPv4Protocol || text != address.toString()) return false;
-    // Link-local metadata services are not a LAN pairing destination.
-    return address.isLoopback() || address.isInSubnet(QHostAddress("10.0.0.0"), 8)
-        || address.isInSubnet(QHostAddress("172.16.0.0"), 12) || address.isInSubnet(QHostAddress("192.168.0.0"), 16);
+    const auto address = Address::parse(text.toStdString());
+    if (!address || address->family() != ii::network::AddressFamily::ipv4 || text.toStdString() != address->string()) return false;
+    const auto &bytes = address->bytes();
+    return address->is_loopback() || bytes[0] == 10 || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+        || (bytes[0] == 192 && bytes[1] == 168);
 }
 QString LanLink::encode() const {
     if (!validLink(*this)) return {};
@@ -102,9 +90,9 @@ class LanPeer::Private {
 public:
     struct Session { QString id, name; bool paired = false; QDateTime deadline; bool awaitingApproval = false; bool binary = false; QByteArray authentication; };
     LanPeer *q;
-    std::unique_ptr<QWebSocketServer> server;
-    QPointer<QWebSocket> client;
-    QHash<QWebSocket *, Session> clients;
+    std::unique_ptr<WebSocketServer> server;
+    QPointer<WebSocket> client;
+    QHash<WebSocket *, Session> clients;
     QHash<QString, QDateTime> requests;
     RequestHandler handler;
     PairingSigner signer;
@@ -128,28 +116,17 @@ public:
         for (const auto &id : pending) emit q->completed(id, protocol::error("connection_lost"), "local");
         emit q->changed();
     }
-    bool pinned(QWebSocket *socket) const {
-        const auto cert = socket->sslConfiguration().peerCertificate();
-        return !cert.isNull() && QString::fromLatin1(cert.digest(QCryptographicHash::Sha256).toHex()) == joining.fingerprint;
+    bool pinned(WebSocket *socket) const {
+        return socket->peerCertificateFingerprint() == joining.fingerprint;
     }
     void openAddress() {
         if (client) { auto *old = client.data(); client = nullptr; old->disconnect(q); old->abort(); old->deleteLater(); }
         if (addressIndex >= joining.addresses.size()) { fail("Cannot reach the desktop. Use the same Wi-Fi or LAN and allow Society in the firewall. " + connectionError); return; }
-        auto *socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, q); client = socket; limits(socket);
-        auto tls = QSslConfiguration::defaultConfiguration(); tls.setProtocol(QSsl::TlsV1_2OrLater); tls.setPeerVerifyMode(QSslSocket::VerifyPeer);
-        socket->setSslConfiguration(tls); helloSent = false;
-        QObject::connect(socket, &QWebSocket::sslErrors, q, [this, socket](const QList<QSslError> &errors) {
-            if (!pinned(socket)) { fail("The desktop certificate does not match the QR code."); return; }
-            for (const auto &e : errors) {
-                if (e.error() != QSslError::SelfSignedCertificate && e.error() != QSslError::SelfSignedCertificateInChain
-                    && e.error() != QSslError::HostNameMismatch && e.error() != QSslError::UnableToGetLocalIssuerCertificate
-                    && e.error() != QSslError::UnableToVerifyFirstCertificate && e.error() != QSslError::CertificateUntrusted) {
-                    fail("The desktop TLS certificate is invalid."); return;
-                }
-            }
-            socket->ignoreSslErrors(errors); // Trust comes from the scanned fingerprint, before any application bytes.
-        });
-        QObject::connect(socket, &QWebSocket::connected, q, [this, socket] {
+        auto *socket = new WebSocket(q); client = socket;
+        TlsConfiguration tls;
+        if (!pinCertificate(tls, joining.fingerprint)) { fail("Invalid desktop certificate fingerprint."); return; }
+        socket->setTlsConfiguration(std::move(tls)); helloSent = false;
+        QObject::connect(socket, &WebSocket::connected, q, [this, socket] {
             if (!pinned(socket)) { fail("The desktop certificate does not match the QR code."); return; }
             helloSent = true; phase = "verifying";
             clientNonce = randomCode(); verificationCode = verification(joining, clientId, clientNonce);
@@ -160,16 +137,16 @@ public:
             send(socket, {{"proof", proof}, {"type", "pair"}, {"host", joining.hostId}, {"code", joining.code}, {"peerId", clientId}, {"name", clientName}, {"nonce", clientNonce}, {"binary", 1}});
             joining.code.clear(); emit q->changed();
         });
-        QObject::connect(socket, &QWebSocket::textMessageReceived, q, [this](const QString &text) { clientMessage(parse(text)); });
-        QObject::connect(socket, &QWebSocket::binaryMessageReceived, q, [this, socket](const QByteArray &frame) {
+        QObject::connect(socket, &WebSocket::textMessageReceived, q, [this](const QString &text) { clientMessage(parse(text)); });
+        QObject::connect(socket, &WebSocket::binaryMessageReceived, q, [this, socket](const QByteArray &frame) {
             if (!clientPaired || !socket->property("iish.binary").toBool()) { fail("Unnegotiated binary frame."); return; }
             clientMessage(BinaryFrame::decode(frame));
         });
-        QObject::connect(socket, &QWebSocket::errorOccurred, q, [this, socket] {
+        QObject::connect(socket, &WebSocket::errorOccurred, q, [this, socket] {
             connectionError = socket->errorString();
             if (!helloSent && !stopping) openAddress(); else if (!stopping) fail("The local connection failed. Scan a new QR code.");
         });
-        QObject::connect(socket, &QWebSocket::disconnected, q, [this] { if (!stopping) fail("The desktop disconnected. Scan a new QR code to reconnect."); });
+        QObject::connect(socket, &WebSocket::disconnected, q, [this] { if (!stopping) fail("The desktop disconnected. Scan a new QR code to reconnect."); });
         QUrl url; url.setScheme("wss"); url.setHost(joining.addresses[addressIndex++]); url.setPort(joining.port);
         connectDeadline = QDateTime::currentDateTimeUtc().addSecs(4); socket->open(url);
     }
@@ -201,7 +178,7 @@ public:
         }
         fail("The desktop returned an invalid local pairing response.");
     }
-    void hostMessage(QWebSocket *socket, const QJsonObject &m) {
+    void hostMessage(WebSocket *socket, const QJsonObject &m) {
         if (!clients.contains(socket)) return;
         const auto reject = [&](const QString &message) { send(socket, {{"type", "error"}, {"error", message}}); socket->close(); };
         auto &session = clients[socket]; const auto type = m.value("type").toString();
@@ -261,9 +238,9 @@ public:
 };
 LanPeer::LanPeer(QObject *parent) : QObject(parent), d(std::make_unique<Private>(this)) {}
 LanPeer::~LanPeer() { stop(); }
-bool LanPeer::startHost(QString hostId, QString name, RequestHandler handler, QStringList addresses, QHostAddress bindAddress) {
+bool LanPeer::startHost(QString hostId, QString name, RequestHandler handler, QStringList addresses, Address bindAddress) {
     stop();
-#ifndef IISERVERHOST_LAN_HOST
+#ifndef IIWEBSERVER_LAN_HOST
     Q_UNUSED(hostId); Q_UNUSED(name); Q_UNUSED(handler); Q_UNUSED(addresses); Q_UNUSED(bindAddress);
     d->fail("Only desktop Society can host Files."); return false;
 #else
@@ -272,23 +249,23 @@ bool LanPeer::startHost(QString hostId, QString name, RequestHandler handler, QS
     for (const auto &address : addresses) if (!LanLink::localAddress(address)) { d->fail("A private local IPv4 address is required."); return false; }
     if (!identifier(hostId) || name.isEmpty() || name.size() > 128 || !handler) { d->fail("Invalid local host identity."); return false; }
     const auto tls = createLanIdentity(addresses);
-    if (tls.localCertificate().isNull() || tls.privateKey().isNull()) { d->fail("Could not create the desktop TLS identity."); return false; }
+    if (!hasIdentity(tls)) { d->fail("Could not create the desktop TLS identity."); return false; }
     d->server = listener(bindAddress, 0, tls, d->error);
     if (!d->server) { d->fail(d->error); return false; }
     d->handler = std::move(handler);
     d->offer = {addresses, d->server->serverPort(), std::move(hostId), std::move(name),
-        QString::fromLatin1(tls.localCertificate().digest(QCryptographicHash::Sha256).toHex()), {}, {}};
-    connect(d->server.get(), &QWebSocketServer::newConnection, this, [this] {
+        certificateFingerprint(tls), {}, {}};
+    connect(d->server.get(), &WebSocketServer::newConnection, this, [this] {
         while (d->server->hasPendingConnections()) {
-            auto *socket = d->server->nextPendingConnection(); socket->setParent(this); limits(socket);
-            if (d->clients.size() >= 8 || !LanLink::localAddress(socket->peerAddress().toString())) { socket->close(); socket->deleteLater(); continue; }
+            auto *socket = d->server->nextPendingConnection(); socket->setParent(this);
+            if (d->clients.size() >= 8 || !LanLink::localAddress(socket->peerAddress())) { socket->close(); socket->deleteLater(); continue; }
             d->clients.insert(socket, {{}, {}, false, QDateTime::currentDateTimeUtc().addSecs(5)});
-            connect(socket, &QWebSocket::textMessageReceived, this, [this, socket](const QString &text) { d->hostMessage(socket, parse(text)); });
-            connect(socket, &QWebSocket::binaryMessageReceived, this, [this, socket](const QByteArray &frame) {
+            connect(socket, &WebSocket::textMessageReceived, this, [this, socket](const QString &text) { d->hostMessage(socket, parse(text)); });
+            connect(socket, &WebSocket::binaryMessageReceived, this, [this, socket](const QByteArray &frame) {
                 if (!d->clients.value(socket).paired || !socket->property("iish.binary").toBool()) { socket->close(); return; }
                 d->hostMessage(socket, BinaryFrame::decode(frame));
             });
-            connect(socket, &QWebSocket::disconnected, this, [this, socket] {
+            connect(socket, &WebSocket::disconnected, this, [this, socket] {
                 const auto previous = d->clients.take(socket); socket->deleteLater();
                 if (!previous.id.isEmpty() && !previous.paired && d->phase == "verifying") { d->phase = "error"; d->error = "Pairing was interrupted. Show a new QR code."; }
                 emit changed();

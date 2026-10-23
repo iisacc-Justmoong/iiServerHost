@@ -1,7 +1,7 @@
 #include "StorageBridge.h"
 #include <QtCore/QTimer>
 #include <QtCore/QUuid>
-#ifdef IISERVERHOST_STORAGE_PROCESS
+#ifdef IIWEBSERVER_STORAGE_PROCESS
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -19,7 +19,7 @@
 #undef CopyFile
 #endif
 
-namespace iiServerHost {
+namespace iiWebServer {
 namespace {
 bool privatePath(const QString &path, bool directory) {
     const QFileInfo f(path);
@@ -174,13 +174,13 @@ QString validateServer(const FileServerOptions &o, const StorageBridgeOptions &b
             || (!backend.configFile.isEmpty() && inside(backend.configFile, root.canonicalFilePath()))
             || (!o.privateKey.isEmpty() && inside(o.privateKey, root.canonicalFilePath()))) return "secrets_inside_exported_root";
     }
-    if (!o.port || o.address.isNull() || o.address.isMulticast()) return "invalid_listen_address";
+    if (!o.port || o.address.is_multicast()) return "invalid_listen_address";
     if (spec.command.isEmpty()) return "unsupported_protocol";
     if (spec.auth && (o.username.isEmpty() || (o.password.isEmpty() && !(spec.command == "sftp" && !o.authorizedKeys.isEmpty()))))
         return "authentication_required";
     if (o.username.contains(':') || o.username.contains(',') || o.username.contains('"') || o.username.contains(QChar::Null)
         || o.password.contains('\0') || o.username.contains('\n') || o.username.contains('\r')) return "invalid_credentials";
-    if (!spec.tls && spec.command != "sftp" && !o.address.isLoopback() && !o.allowCleartext) return "cleartext_disabled";
+    if (!spec.tls && spec.command != "sftp" && !o.address.is_loopback() && !o.allowCleartext) return "cleartext_disabled";
     if (spec.tls && (!QFileInfo(o.certificate).isAbsolute() || !QFileInfo(o.certificate).isFile()
         || !QFileInfo(o.certificate).isReadable() || !privatePath(o.privateKey, false))) return "tls_identity_required";
     if (spec.command == "sftp" && !privatePath(o.privateKey, false)) return "ssh_host_key_required";
@@ -191,7 +191,7 @@ QString validateServer(const FileServerOptions &o, const StorageBridgeOptions &b
         const auto range = QRegularExpression("^([0-9]{1,5})-([0-9]{1,5})$").match(o.passivePorts);
         if (!range.hasMatch() || range.captured(1).toInt() < 1 || range.captured(2).toInt() > 65535
             || range.captured(1).toInt() > range.captured(2).toInt()) return "invalid_passive_ports";
-        if (!o.publicAddress.isEmpty() && QHostAddress(o.publicAddress).isNull()) return "invalid_public_address";
+        if (!o.publicAddress.isEmpty() && !Address::parse(o.publicAddress.toStdString())) return "invalid_public_address";
     }
     if (pythonFtp) {
         const QFileInfo python(backend.ftpPythonExecutable), script(backend.ftpServerScript);
@@ -326,8 +326,8 @@ bool FileProtocolServer::start(const FileServerOptions &options) {
     d->stopping = false;
     const auto spec = serverSpec(options.protocol);
     const bool pythonFtp = spec.command == "ftps" || spec.command == "ftpes";
-    QString address = options.address.toString();
-    if (options.address.protocol() == QAbstractSocket::IPv6Protocol) address = '[' + address + ']';
+    QString address = QString::fromStdString(options.address.string());
+    if (options.address.family() == ii::network::AddressFamily::ipv6) address = '[' + address + ']';
     QStringList args{"serve", spec.command, options.root, "--addr", address + ':' + QString::number(options.port)};
     if (options.readOnly) args.append("--read-only");
     if (spec.tls && !pythonFtp) {
@@ -353,14 +353,14 @@ bool FileProtocolServer::start(const FileServerOptions &options) {
     }
     // Never enable symlink following or user-supplied auth-proxy commands.
     if (pythonFtp) {
-        args = {"-B", d->backend.ftpServerScript, "--root", options.root, "--address", options.address.toString(),
+        args = {"-B", d->backend.ftpServerScript, "--root", options.root, "--address", QString::fromStdString(options.address.string()),
             "--port", QString::number(options.port), "--certificate", options.certificate, "--key", options.privateKey,
             "--passive-ports", options.passivePorts};
         if (spec.command == "ftps") args.append("--implicit");
         if (options.readOnly) args.append("--read-only");
         if (!options.publicAddress.isEmpty()) args += {"--public-address", options.publicAddress};
-        env.insert("IISERVERHOST_FTP_USER", options.username);
-        env.insert("IISERVERHOST_FTP_PASSWORD", QString::fromUtf8(options.password));
+        env.insert("IIWEBSERVER_FTP_USER", options.username);
+        env.insert("IIWEBSERVER_FTP_PASSWORD", QString::fromUtf8(options.password));
     } else args += commonArguments(d->backend);
     auto *process = new QProcess(this); d->process = process;
     bindChildLifetime(process);
@@ -394,11 +394,11 @@ void FileProtocolServer::stop() {
 bool FileProtocolServer::isRunning() const { return d->process && d->process->state() == QProcess::Running; }
 QString FileProtocolServer::errorString() const { return d->error; }
 
-} // namespace iiServerHost
+} // namespace iiWebServer
 #else
 // QProcess is absent from several mobile Qt builds. Keep the public ABI available
 // without including or linking that optional Qt feature.
-namespace iiServerHost {
+namespace iiWebServer {
 struct StorageBridge::Impl {};
 StorageBridge::StorageBridge(StorageBridgeOptions, QObject *parent) : QObject(parent), d(std::make_unique<Impl>()) {
     qRegisterMetaType<StorageResult>();
@@ -419,5 +419,5 @@ bool FileProtocolServer::start(const FileServerOptions &) { return false; }
 void FileProtocolServer::stop() {}
 bool FileProtocolServer::isRunning() const { return false; }
 QString FileProtocolServer::errorString() const { return "external_backend_disabled"; }
-} // namespace iiServerHost
+} // namespace iiWebServer
 #endif

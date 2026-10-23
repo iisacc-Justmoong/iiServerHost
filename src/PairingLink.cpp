@@ -3,7 +3,7 @@
 #include <QUrlQuery>
 #include <QSet>
 
-namespace iiServerHost {
+namespace iiWebServer {
 namespace {
 bool valid(const PairingLink &link) {
     static const QRegularExpression codePattern("\\A[a-f0-9]{64}\\z");

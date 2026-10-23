@@ -1,12 +1,11 @@
 #include "LanIdentity.h"
-#include <QSslKey>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 #include <memory>
 
-namespace iiServerHost {
-QSslConfiguration createLanIdentity(const QStringList &addresses) {
+namespace iiWebServer {
+TlsConfiguration createLanIdentity(const QStringList &addresses) {
     std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", size_t(2048)), EVP_PKEY_free);
     std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new(), X509_free);
     if (!key || !cert || !X509_set_version(cert.get(), 2)
@@ -14,10 +13,10 @@ QSslConfiguration createLanIdentity(const QStringList &addresses) {
         || !X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60)
         || !X509_gmtime_adj(X509_getm_notAfter(cert.get()), 86400)
         || !X509_set_pubkey(cert.get(), key.get())) return {};
-    auto *subject = X509_get_subject_name(cert.get());
-    if (!X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+    std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> subject(X509_NAME_new(), X509_NAME_free);
+    if (!subject || !X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC,
             reinterpret_cast<const unsigned char *>("Society local device"), -1, -1, 0)
-        || !X509_set_issuer_name(cert.get(), subject)) return {};
+        || !X509_set_subject_name(cert.get(), subject.get()) || !X509_set_issuer_name(cert.get(), subject.get())) return {};
     QStringList names; for (const auto &address : addresses) names.append("IP:" + address);
     const auto add = [&](int nid, const QByteArray &value) {
         std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
@@ -31,9 +30,9 @@ QSslConfiguration createLanIdentity(const QStringList &addresses) {
     if (!certPem || !keyPem || !PEM_write_bio_X509(certPem.get(), cert.get())
         || !PEM_write_bio_PrivateKey(keyPem.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr)) return {};
     const auto bytes = [](BIO *bio) { char *data = nullptr; const auto size = BIO_get_mem_data(bio, &data); return QByteArray(data, size); };
-    auto tls = QSslConfiguration::defaultConfiguration();
-    tls.setLocalCertificate(QSslCertificate(bytes(certPem.get())));
-    auto pem = bytes(keyPem.get()); tls.setPrivateKey(QSslKey(pem, QSsl::Rsa)); pem.fill('\0');
+    TlsConfiguration tls;
+    tls.policy.identity.certificate_chain_pem = bytes(certPem.get()).toStdString();
+    auto pem = bytes(keyPem.get()); tls.policy.identity.private_key_pem = pem.toStdString(); pem.fill('\0');
     return tls;
 }
 }

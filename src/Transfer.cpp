@@ -8,16 +8,16 @@
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtCore/QUuid>
-#include <QtNetwork/QHostAddress>
+#include "NetworkTypes.h"
 #include <atomic>
 #include <algorithm>
 #include <functional>
 #include <limits>
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
 #include <curl/curl.h>
 #endif
 
-namespace iiServerHost {
+namespace iiWebServer {
 namespace {
 struct Job {
     std::atomic_bool cancelled{false};
@@ -25,7 +25,7 @@ struct Job {
     TransferResult result;
 };
 
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
 bool curlReady() {
     // One initialization per library lifetime, before any transfer threads start.
     static const auto status = curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -57,7 +57,7 @@ QString validate(const TransferRequest &r) {
         if (!r.url.host().isEmpty() || r.url.hasQuery() || !QFileInfo(r.url.toLocalFile()).isAbsolute()) return "invalid_url";
     } else {
         if (r.url.host().isEmpty()) return "invalid_url";
-        if (!p->encrypted && !r.allowCleartext && !QHostAddress(r.url.host()).isLoopback()) return "cleartext_disabled";
+        if (!p->encrypted && !r.allowCleartext && !(Address::parse(r.url.host().toStdString()) && Address::parse(r.url.host().toStdString())->is_loopback())) return "cleartext_disabled";
     }
     if (!r.expectedSha256.isEmpty() && !QRegularExpression("^[a-fA-F0-9]{64}$").match(QString::fromLatin1(r.expectedSha256)).hasMatch())
         return "invalid_checksum";
@@ -278,14 +278,14 @@ FileTransfer::~FileTransfer() {
     }
 }
 QString FileTransfer::backendVersion() {
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
     if (curlReady()) return QString::fromLatin1(curl_version());
 #endif
     return {};
 }
 QStringList FileTransfer::httpVersions() {
     QStringList result;
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
     if (!curlReady()) return result;
     bool http = false;
     for (const auto &p : protocols()) if (p.scheme == "http" || p.scheme == "https") http = true;
@@ -299,7 +299,7 @@ QStringList FileTransfer::httpVersions() {
 }
 QList<TransferProtocol> FileTransfer::protocols() {
     QList<TransferProtocol> result;
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
     if (!curlReady()) return result;
     const QList<TransferProtocol> candidates{
         {"file", true, true, false, false}, {"http", true, true, false, false},
@@ -326,7 +326,7 @@ QList<TransferProtocol> FileTransfer::protocols() {
 QString FileTransfer::start(const TransferRequest &request) {
     const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     QString error;
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
     error = curlReady() ? validate(request) : "backend_unavailable";
 #else
     error = "backend_unavailable";
@@ -337,7 +337,7 @@ QString FileTransfer::start(const TransferRequest &request) {
         QTimer::singleShot(0, this, [this, id, result] { emit finished(id, result); });
         return id;
     }
-#ifdef IISERVERHOST_CURL
+#ifdef IIWEBSERVER_CURL
     auto job = std::make_shared<Job>();
     job->thread = QThread::create([this, id, request, job] {
         job->result = perform(request, *job, [this, id](qint64 bytes, qint64 total) {
@@ -357,4 +357,4 @@ QString FileTransfer::start(const TransferRequest &request) {
 void FileTransfer::cancel(const QString &id) { if (const auto job = d->jobs.value(id)) job->cancelled = true; }
 int FileTransfer::activeCount() const { return int(d->jobs.size()); }
 
-} // namespace iiServerHost
+} // namespace iiWebServer

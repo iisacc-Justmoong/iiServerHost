@@ -6,7 +6,7 @@
 #include <QtCore/QTimer>
 #include <csignal>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 namespace { volatile std::sig_atomic_t interrupted = 0; void interrupt(int) { interrupted = 1; } }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);

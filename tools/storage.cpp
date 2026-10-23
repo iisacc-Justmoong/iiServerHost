@@ -5,7 +5,7 @@
 #include <QtCore/QTimer>
 #include <csignal>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 namespace { volatile std::sig_atomic_t interrupted = 0; void interrupt(int) { interrupted = 1; } }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
@@ -39,7 +39,8 @@ int main(int argc, char **argv) {
         if (!protocols.contains(protocol)) return cli::failure("unsupported_protocol");
         options.protocol = protocols.value(protocol);
         options.root = o["root"].toString();
-        options.address = QHostAddress(o["address"].toString("127.0.0.1"));
+        const auto address = iiWebServer::Address::parse(o["address"].toString("127.0.0.1").toStdString());
+        if (!address) return 2; options.address = *address;
         const auto port = o["port"].toInt();
         if (port < 1 || port > 65535) return cli::failure("invalid_port");
         options.port = quint16(port);

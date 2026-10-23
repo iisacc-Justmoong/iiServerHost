@@ -21,9 +21,9 @@ import urllib.request
 from fixture_directory import FixtureDirectory
 
 transfer_exe, storage_exe, build_dir = map(lambda x: Path(x).resolve(), sys.argv[1:4])
-rclone = os.environ.get("IISERVERHOST_TEST_RCLONE", "")
+rclone = os.environ.get("IIWEBSERVER_TEST_RCLONE", "")
 if not rclone:
-    print("SKIP: set IISERVERHOST_TEST_RCLONE to exercise real protocol servers")
+    print("SKIP: set IIWEBSERVER_TEST_RCLONE to exercise real protocol servers")
     sys.exit(77)
 capabilities = json.loads(subprocess.check_output([transfer_exe, "--capabilities"], text=True))
 if not capabilities["protocols"]:
@@ -58,7 +58,7 @@ with FixtureDirectory(prefix="protocol-process-", dir=build_dir) as temporary:
     source.write_bytes(payload)
     output = base / "download.bin"
     backend = {"executable": rclone, "runtimeDirectory": str(runtime),
-               "ftpPythonExecutable": os.environ.get("IISERVERHOST_TEST_FTP_PYTHON", sys.executable),
+               "ftpPythonExecutable": os.environ.get("IIWEBSERVER_TEST_FTP_PYTHON", sys.executable),
                "ftpServerScript": str(build_dir / "ftp_server.py")}
 
     def transfer(operation, url, path, *, success=True, **kwargs):

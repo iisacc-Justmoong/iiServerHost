@@ -12,9 +12,9 @@
 #include <memory>
 #include <vector>
 
-namespace iiServerHost::windows_files {
+namespace iiWebServer::windows_files {
 inline bool safeEntry(const QString& name) {
-    return !name.isEmpty() && name != "." && name != ".." && !name.startsWith(".iiserverhost-")
+    return !name.isEmpty() && name != "." && name != ".." && !name.startsWith(".iiwebserver-")
         && !iiFileProvider::native::Presentation::isControlFile(std::filesystem::path(name.toStdU16String()))
         && !name.contains('/') && !name.contains('\\') && !name.contains(':') && !name.contains(QChar::Null);
 }
@@ -123,7 +123,7 @@ inline QJsonObject handle(const QString& root, quint64 device, quint64 inode,
         if (encoded.size() > ((FileShare::ChunkBytes + 2) / 3) * 4) return protocol::error("write_too_large");
         const auto decoded = QByteArray::fromBase64Encoding(encoded, QByteArray::AbortOnBase64DecodingErrors);
         if (!request.value("data").isString() || !decoded || decoded.decoded.size() > FileShare::ChunkBytes) return protocol::error("invalid_data");
-        const auto temporary = QDir::toNativeSeparators(QDir(pinned.absolute).filePath(".iiserverhost-" + protocol::uuid()));
+        const auto temporary = QDir::toNativeSeparators(QDir(pinned.absolute).filePath(".iiwebserver-" + protocol::uuid()));
         const auto source = reinterpret_cast<LPCWSTR>(temporary.utf16());
         const auto file = iiFileProvider::native::createFile(source, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);

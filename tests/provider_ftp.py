@@ -11,9 +11,9 @@ import tempfile
 import time
 from fixture_directory import FixtureDirectory
 
-interpreter = os.environ.get("IISERVERHOST_TEST_FTP_PYTHON")
-if interpreter and not os.environ.get("IISERVERHOST_FTP_TEST_CHILD"):
-    environment = dict(os.environ, IISERVERHOST_FTP_TEST_CHILD="1")
+interpreter = os.environ.get("IIWEBSERVER_TEST_FTP_PYTHON")
+if interpreter and not os.environ.get("IIWEBSERVER_FTP_TEST_CHILD"):
+    environment = dict(os.environ, IIWEBSERVER_FTP_TEST_CHILD="1")
     raise SystemExit(subprocess.call([interpreter, "-B", __file__, *sys.argv[1:]], env=environment))
 try:
     import OpenSSL
@@ -29,7 +29,7 @@ with FixtureDirectory(prefix="provider-ftp-", dir=build) as temporary:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    environment = dict(os.environ, IISERVERHOST_FTP_USER="fixture", IISERVERHOST_FTP_PASSWORD="fixture-secret")
+    environment = dict(os.environ, IIWEBSERVER_FTP_USER="fixture", IIWEBSERVER_FTP_PASSWORD="fixture-secret")
     # Exercise discovery of the adjacent build runtime, not a developer SDK.
     environment = {key: value for key, value in environment.items()
                    if not key.startswith(("IIFILEPROVIDER_", "DYLD_"))}

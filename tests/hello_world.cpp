@@ -1,4 +1,4 @@
-#include <iiServerHost.h>
+#include <iiWebServer.h>
 
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
@@ -13,7 +13,7 @@ int main()
         std::cerr << "Unexpected Qt runtime: " << qVersion() << '\n';
         return 1;
     }
-    const QString message = iiServerHost::helloWorld();
+    const QString message = iiWebServer::helloWorld();
     std::cout << message.toStdString() << '\n';
     return message == QStringLiteral("Hello world!") ? 0 : 1;
 }

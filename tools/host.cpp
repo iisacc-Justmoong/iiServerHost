@@ -1,14 +1,13 @@
-#include <ServerHost.h>
+#include <WebServer.h>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
-#include <QSslKey>
 #include <QTextStream>
 #include <QTimer>
 
 int main(int argc, char **argv) {
-    QCoreApplication app(argc, argv); app.setApplicationName("ii-server-host");
+    QCoreApplication app(argc, argv); app.setApplicationName("ii-web-server");
     QCommandLineParser parser; parser.addHelpOption();
     parser.addOptions({{"relay", "Trusted WSS relay URL.", "url"}, {"id", "Stable peer identifier.", "id"},
         {"credential-file", "Private file containing the account Cookie header.", "path"},
@@ -20,19 +19,17 @@ int main(int argc, char **argv) {
     parser.process(app);
     QFile credential(parser.value("credential-file"));
     if (!credential.open(QIODevice::ReadOnly) || credential.size() > 16384) parser.showHelp(2);
-    iiServerHost::PeerOptions options;
+    iiWebServer::PeerOptions options;
     options.credential = credential.readAll().trimmed(); options.relayUrl = QUrl(parser.value("relay"));
     options.peerId = parser.value("id"); options.name = options.peerId;
-    options.localEnabled = !parser.isSet("no-local"); options.listenAddress = QHostAddress(parser.value("address"));
+    options.localEnabled = !parser.isSet("no-local"); const auto bind = iiWebServer::Address::parse(parser.value("address").toStdString());
+    if (!bind) parser.showHelp(2); options.listenAddress = *bind;
     options.hostFiles = parser.isSet("root");
     if (parser.isSet("certificate") || parser.isSet("key")) {
-        const auto certs = QSslCertificate::fromPath(parser.value("certificate")); QFile file(parser.value("key"));
-        if (certs.isEmpty() || !file.open(QIODevice::ReadOnly)) parser.showHelp(2);
-        const auto pem = file.readAll(); QSslKey key(pem, QSsl::Rsa); if (key.isNull()) key = QSslKey(pem, QSsl::Ec);
-        if (key.isNull()) parser.showHelp(2);
-        options.localTls = QSslConfiguration::defaultConfiguration(); options.localTls.setLocalCertificateChain(certs); options.localTls.setPrivateKey(key);
+        options.localTls.policy.identity.certificate_chain_file = parser.value("certificate").toStdString();
+        options.localTls.policy.identity.private_key_file = parser.value("key").toStdString();
     }
-    iiServerHost::FileShare share(parser.value("root")); iiServerHost::Peer peer;
+    iiWebServer::FileShare share(parser.value("root")); iiWebServer::Peer peer;
     bool announced = false, requested = false;
     const auto request = [&] {
         if (!peer.isReady() || requested || !parser.isSet("peer")) return;
@@ -40,15 +37,15 @@ int main(int argc, char **argv) {
         if (!found) return;
         requested = true; peer.request(parser.value("peer"), {{"op", parser.isSet("read") ? "read" : "list"}, {"path", parser.value("path")}});
     };
-    QObject::connect(&peer, &iiServerHost::Peer::peersChanged, &app, request);
-    QObject::connect(&peer, &iiServerHost::Peer::stateChanged, &app, [&] {
+    QObject::connect(&peer, &iiWebServer::Peer::peersChanged, &app, request);
+    QObject::connect(&peer, &iiWebServer::Peer::stateChanged, &app, [&] {
         if (peer.isReady() && !announced && !parser.isSet("peer")) {
             announced = true;
             QTextStream(stdout) << QJsonDocument(QJsonObject{{"ready", true}, {"localPort", peer.localPort()}}).toJson(QJsonDocument::Compact) << Qt::endl;
         }
         request();
     });
-    QObject::connect(&peer, &iiServerHost::Peer::completed, &app, [&](const QString &, const QJsonObject &result, const QString &transport) {
+    QObject::connect(&peer, &iiWebServer::Peer::completed, &app, [&](const QString &, const QJsonObject &result, const QString &transport) {
         QTextStream(stdout) << QJsonDocument(QJsonObject{{"result", result}, {"transport", transport}}).toJson(QJsonDocument::Compact) << Qt::endl;
         app.exit(result.value("ok").toBool() ? 0 : 1);
     });

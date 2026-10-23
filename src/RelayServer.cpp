@@ -1,11 +1,11 @@
-#include "ServerHost.h"
+#include "WebServer.h"
 #include "Protocol.h"
 #include <QPointer>
 #include <QCryptographicHash>
 #include <QRandomGenerator>
 #include <QTimer>
 
-namespace iiServerHost {
+namespace iiWebServer {
 using namespace protocol;
 class RelayServer::Private {
 public:
@@ -18,13 +18,13 @@ public:
         QDateTime pairingWindow;
         int pairingAttempts = 0;
     };
-    struct Route { QPointer<QWebSocket> client, host; QString id; QDateTime expires; };
-    struct Offer { QPointer<QWebSocket> host; QString request; QDateTime expires; };
-    struct Pair { QPointer<QWebSocket> host, client; QString hostRequest, clientRequest; QDateTime expires; };
+    struct Route { QPointer<WebSocket> client, host; QString id; QDateTime expires; };
+    struct Offer { QPointer<WebSocket> host; QString request; QDateTime expires; };
+    struct Pair { QPointer<WebSocket> host, client; QString hostRequest, clientRequest; QDateTime expires; };
     RelayServer *q;
     Authenticator auth;
-    std::unique_ptr<QWebSocketServer> server;
-    QHash<QWebSocket *, Session> sessions;
+    std::unique_ptr<WebSocketServer> server;
+    QHash<WebSocket *, Session> sessions;
     QHash<QString, Route> routes;
     QHash<QByteArray, Offer> offers; // Only SHA-256 hashes of QR codes are retained.
     QHash<QString, Pair> pairs;
@@ -34,8 +34,8 @@ public:
         timer.setInterval(500);
         QObject::connect(&timer, &QTimer::timeout, q, [this] { sweep(); });
     }
-    bool active(QWebSocket *s) const { return sessions.contains(s) && live(sessions.value(s).principal); }
-    void pairing(QWebSocket *s, const QString &id, const QString &status, QJsonObject data = {}) {
+    bool active(WebSocket *s) const { return sessions.contains(s) && live(sessions.value(s).principal); }
+    void pairing(WebSocket *s, const QString &id, const QString &status, QJsonObject data = {}) {
         data.insert("type", "pairing"); data.insert("id", id); data.insert("status", status); send(s, data);
     }
     void finishPair(const QString &id, const QString &status) {
@@ -44,7 +44,7 @@ public:
         if (p.host) pairing(p.host, p.hostRequest, status, {{"pairingId", id}, {"peerId", sessions.value(p.client).id}, {"name", sessions.value(p.client).name}});
         if (p.client) pairing(p.client, p.clientRequest, status, {{"pairingId", id}, {"peerId", sessions.value(p.host).id}, {"name", sessions.value(p.host).name}});
     }
-    void cancelPairing(QWebSocket *s, const QString &request = {}) {
+    void cancelPairing(WebSocket *s, const QString &request = {}) {
         for (const auto &hash : offers.keys()) {
             const auto o = offers.value(hash);
             if (o.host == s && (request.isEmpty() || o.request == request)) {
@@ -57,7 +57,7 @@ public:
                 || (p.client == s && (request.isEmpty() || p.clientRequest == request))) finishPair(id, "cancelled");
         }
     }
-    bool pairMessage(QWebSocket *s, const QJsonObject &m) {
+    bool pairMessage(WebSocket *s, const QJsonObject &m) {
         const auto type = m.value("type").toString(), id = m.value("id").toString();
         if (!type.startsWith("pair-")) return false;
         if (type == "pair-confirm") {
@@ -101,14 +101,14 @@ public:
         }
         s->close(); return true;
     }
-    QWebSocket *target(QWebSocket *source, const QString &id) const {
+    WebSocket *target(WebSocket *source, const QString &id) const {
         const auto caller = sessions.value(source);
         for (auto it = sessions.cbegin(); it != sessions.cend(); ++it)
             if (it.key() != source && it->id == id && live(it->principal) && !it->descriptor.isEmpty()
                 && it->principal.accountId == caller.principal.accountId && it->service == caller.service) return it.key();
         return nullptr;
     }
-    void directory(QWebSocket *s) {
+    void directory(WebSocket *s) {
         if (!active(s) || sessions[s].id.isEmpty()) return;
         QJsonArray peers;
         for (auto it = sessions.cbegin(); it != sessions.cend(); ++it)
@@ -118,7 +118,7 @@ public:
         send(s, {{"type", "peers"}, {"peers", peers}});
     }
     void changed() { const auto all = sessions.keys(); for (auto *s : all) directory(s); }
-    void remove(QWebSocket *s) {
+    void remove(WebSocket *s) {
         cancelPairing(s);
         sessions.remove(s);
         for (const auto &key : routes.keys()) {
@@ -144,7 +144,7 @@ public:
             const auto state = sessions.value(s);
             if ((!state.principal.accountId.isEmpty() && !live(state.principal))
                 || (state.principal.accountId.isEmpty() && state.connected.msecsTo(now) > 7000))
-                s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Authentication expired");
+                s->close(1008, "Authentication expired");
             else s->ping();
         }
         for (const auto &id : routes.keys()) if (routes.value(id).expires < now) {
@@ -152,7 +152,7 @@ public:
             if (r.client) send(r.client, {{"type", "response"}, {"id", r.id}, {"result", protocol::error("timeout")}});
         }
     }
-    void message(QWebSocket *s, const QJsonObject &m) {
+    void message(WebSocket *s, const QJsonObject &m) {
         if (!sessions.contains(s)) return;
         const auto type = m.value("type").toString();
         if (type == "auth") {
@@ -160,7 +160,7 @@ public:
             const auto credential = m.value("credential").toString().toUtf8();
             if (session.authenticating || credential.isEmpty() || credential.size() > 16384 || !auth) { s->close(); return; }
             session.authenticating = true;
-            const QPointer<RelayServer> owner(q); const QPointer<QWebSocket> socket(s);
+            const QPointer<RelayServer> owner(q); const QPointer<WebSocket> socket(s);
             auth(credential, [this, owner, socket](Principal p) {
                 if (!owner || !socket || !sessions.contains(socket)) return;
                 auto &state = sessions[socket]; state.authenticating = false;
@@ -174,7 +174,7 @@ public:
                 send(socket, {{"type", "authenticated"}, {"accountId", p.accountId}});
             }); return;
         }
-        if (!active(s)) { s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Authentication required"); return; }
+        if (!active(s)) { s->close(1008, "Authentication required"); return; }
         if (type == "register") {
             const auto id = m.value("peerId").toString(), service = m.value("service").toString();
             if (!identifier(id) || !identifier(service) || m.value("name").toString().size() > 128
@@ -190,7 +190,7 @@ public:
             const auto fp = m.value("fingerprint").toString();
             for (const auto &value : m.value("localUrls").toArray()) {
                 const QUrl url(value.toString());
-                if (urls.size() < 16 && endpoint(url, "wss", "ws") && !QHostAddress(url.host()).isNull()
+                if (urls.size() < 16 && endpoint(url, "wss", "ws") && bool(Address::parse(url.host().toStdString()))
                     && (url.scheme() == "ws" || QRegularExpression("\\A[a-f0-9]{64}\\z").match(fp).hasMatch())) urls.append(url.toString());
             }
             const bool wasHost = !state.descriptor.isEmpty();
@@ -231,23 +231,23 @@ public:
             if (r.client && active(r.client)) send(r.client, {{"type", "response"}, {"id", r.id}, {"result", m.value("result")}});
             return;
         }
-        s->close(QWebSocketProtocol::CloseCodeProtocolError, "Invalid message");
+        s->close(1002, "Invalid message");
     }
 };
 RelayServer::RelayServer(Authenticator auth, QObject *parent) : QObject(parent), d(std::make_unique<Private>(this, std::move(auth))) {}
 RelayServer::~RelayServer() { stop(); }
-bool RelayServer::listen(const QHostAddress &address, quint16 port, const QSslConfiguration &tls) {
+bool RelayServer::listen(const Address &address, quint16 port, const TlsConfiguration &tls) {
     stop(); d->error.clear();
     if (!d->auth) { d->error = "An account authenticator is required."; return false; }
     d->server = listener(address, port, tls, d->error); if (!d->server) return false;
-    connect(d->server.get(), &QWebSocketServer::newConnection, this, [this] {
+    connect(d->server.get(), &WebSocketServer::newConnection, this, [this] {
         while (d->server->hasPendingConnections()) {
-            auto *s = d->server->nextPendingConnection(); s->setParent(this); limits(s);
+            auto *s = d->server->nextPendingConnection(); s->setParent(this);
             if (d->sessions.size() >= 128) { s->close(); s->deleteLater(); continue; }
             d->sessions.insert(s, {});
-            connect(s, &QWebSocket::textMessageReceived, this, [this, s](const QString &m) { d->message(s, parse(m)); });
-            connect(s, &QWebSocket::binaryMessageReceived, s, [s] { s->close(); });
-            connect(s, &QWebSocket::disconnected, this, [this, s] { d->remove(s); });
+            connect(s, &WebSocket::textMessageReceived, this, [this, s](const QString &m) { d->message(s, parse(m)); });
+            connect(s, &WebSocket::binaryMessageReceived, s, [s] { s->close(); });
+            connect(s, &WebSocket::disconnected, this, [this, s] { d->remove(s); });
         }
     }); d->timer.start(); return true;
 }

@@ -1,18 +1,15 @@
+#include "NetworkFixture.h"
 #include <QJsonDocument>
 #include <iiFileProviderPresentation.h>
-#include <iiServerHost.h>
+#include <iiWebServer.h>
 #include <QFile>
 #include <QJsonArray>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
-#include <QWebSocket>
-#include <QTcpServer>
-#include <QTcpSocket>
-#include <QSslKey>
-#include <QSslSocket>
 
-using namespace iiServerHost;
+using namespace iiWebServer;
 namespace {
 Authenticator accounts() {
     return [](const QByteArray &token, AuthCompletion done) {
@@ -24,7 +21,7 @@ PeerOptions options(quint16 port, const QString &id, const QByteArray &token = "
     PeerOptions o;
     o.relayUrl = QUrl(QString("ws://127.0.0.1:%1").arg(port));
     o.credential = token; o.peerId = id; o.name = id;
-    o.listenAddress = QHostAddress::LocalHost;
+    o.listenAddress = Address::loopback();
     o.localAddresses = {"127.0.0.1"};
     o.localTimeoutMs = 150; o.requestTimeoutMs = 2000;
     return o;
@@ -47,7 +44,31 @@ QJsonObject reply(Peer &client, const QString &target, const QJsonObject &payloa
 class HostingTests : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1"); }
+    void reopeningCanDestroyTheSocketFromDisconnect() {
+        WebSocketServer server; QVERIFY(server.listen(Address::loopback(), 0, {}));
+        auto *socket = new WebSocket; QPointer<WebSocket> alive(socket);
+        const QUrl endpoint(QString("ws://127.0.0.1:%1").arg(server.serverPort()));
+        socket->open(endpoint);
+        QTRY_VERIFY(socket->state() == ii::network::SocketState::connected);
+        connect(socket, &WebSocket::disconnected, this, [socket] { delete socket; });
+        socket->open(endpoint);
+        QVERIFY(alive.isNull());
+    }
+    void hostNameDialUsesReachableAddress() {
+        WebSocketServer server; QVERIFY(server.listen(Address::loopback(), 0, {}));
+        WebSocket socket; QSignalSpy connected(&socket, &WebSocket::connected);
+        socket.open(QUrl(QString("ws://localhost:%1").arg(server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 5000);
+    }
+    void cancelledQueuedOpenStaysClosed() {
+        WebSocketServer server; QVERIFY(server.listen(Address::loopback(), 0, {}));
+        WebSocket socket; QSignalSpy accepted(&server, &WebSocketServer::newConnection);
+        QSignalSpy connected(&socket, &WebSocket::connected);
+        socket.open(QUrl(QString("ws://127.0.0.1:%1").arg(server.serverPort())));
+        socket.abort(); QTest::qWait(100);
+        QCOMPARE(socket.state(), ii::network::SocketState::closed);
+        QCOMPARE(connected.size(), 0); QCOMPARE(accepted.size(), 0);
+    }
     void privatePresentationsDoNotConsumePublicPagination() {
         QTemporaryDir root(TEST_DIRECTORY "/presentation-share-XXXXXX"); QVERIFY(root.isValid());
         for (int i = 0; i < 270; ++i) {
@@ -70,7 +91,7 @@ private slots:
         QVERIFY(uploaded); QCOMPARE(uploaded->details.size, std::uint64_t(9));
     }
     void localFirstAndSameAccountOnly() {
-        RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost));
+        RelayServer relay(accounts()); QVERIFY(relay.listen(Address::loopback()));
         Peer host, client, stranger;
         QVERIFY(host.start(options(relay.port(), "host"), [](const auto &sender, const auto &p) {
             return QJsonObject{{"ok", true}, {"sender", sender}, {"echo", p}};
@@ -88,7 +109,7 @@ private slots:
         QVERIFY(!reply(stranger, "host", {}).value("ok").toBool());
     }
     void remoteRelayAndUnreachableLanFallback() {
-        RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost));
+        RelayServer relay(accounts()); QVERIFY(relay.listen(Address::loopback()));
         for (bool local : {false, true}) {
             Peer host, client;
             auto o = options(relay.port(), "host"); o.localEnabled = local;
@@ -104,7 +125,7 @@ private slots:
         }
     }
     void rejectsCredentialsAndUnsafeTransport() {
-        RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost));
+        RelayServer relay(accounts()); QVERIFY(relay.listen(Address::loopback()));
         Peer p;
         auto o = options(relay.port(), "invalid", "invalid");
         QVERIFY(p.start(o));
@@ -113,8 +134,8 @@ private slots:
         o.relayUrl = QUrl("ws://192.168.1.1:5000");
         QVERIFY(!p.start(o));
         RelayServer unsafe(accounts());
-        QVERIFY(!unsafe.listen(QHostAddress::AnyIPv4));
-        o = options(relay.port(), "unsafe"); o.listenAddress = QHostAddress::AnyIPv4;
+        QVERIFY(!unsafe.listen(Address::any()));
+        o = options(relay.port(), "unsafe"); o.listenAddress = Address::any();
         QVERIFY(!p.start(o));
     }
     void expiredAuthorityAndStoppedHostDisappear() {
@@ -122,7 +143,7 @@ private slots:
         RelayServer relay([&](const auto &, AuthCompletion done) {
             done({valid ? "alice" : QString(), QDateTime::currentDateTimeUtc().addMSecs(800)});
         });
-        QVERIFY(relay.listen(QHostAddress::LocalHost));
+        QVERIFY(relay.listen(Address::loopback()));
         Peer host, client;
         QVERIFY(host.start(options(relay.port(), "host")));
         QVERIFY(client.start(options(relay.port(), "client")));
@@ -134,18 +155,18 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!client.isReady(), 2000);
     }
     void localListenerRejectsUnauthenticatedRequests() {
-        RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost));
+        RelayServer relay(accounts()); QVERIFY(relay.listen(Address::loopback()));
         Peer host; int calls = 0;
         QVERIFY(host.start(options(relay.port(), "host"), [&](const auto &, const auto &) { ++calls; return QJsonObject{{"ok", true}}; }));
         QTRY_VERIFY(host.isReady());
-        QWebSocket attack;
-        connect(&attack, &QWebSocket::connected, &attack, [&] {
+        WebSocket attack;
+        connect(&attack, &WebSocket::connected, &attack, [&] {
             attack.sendTextMessage(R"({"type":"request","id":"attack","payload":{"op":"read","path":"secret"}})");
         });
         attack.open(QUrl(QString("ws://127.0.0.1:%1").arg(host.localPort())));
         QTest::qWait(200);
         QCOMPARE(calls, 0);
-        QCOMPARE(attack.state(), QAbstractSocket::UnconnectedState);
+        QVERIFY(attack.state() == ii::network::SocketState::closed || attack.state() == ii::network::SocketState::failed);
     }
     void filesAreBoundedAndConfined() {
         QTemporaryDir root(TEST_DIRECTORY "/share-XXXXXX"), outside(TEST_DIRECTORY "/outside-XXXXXX");
@@ -193,11 +214,11 @@ private slots:
         QVERIFY(!share.handle({{"op", "read"}, {"path", "large.bin"}, {"offset", "-1"}}).value("ok").toBool());
     }
     void sessionVerifierIsolatesCookiesAndRejectsRedirect() {
-        QTcpServer http; QVERIFY(http.listen(QHostAddress::LocalHost));
+        TestTcpServer http; QVERIFY(http.listen(Address::loopback()));
         QList<QByteArray> seen;
-        connect(&http, &QTcpServer::newConnection, &http, [&] {
+        connect(&http, &TestTcpServer::newConnection, &http, [&] {
             auto *s = http.nextPendingConnection();
-            connect(s, &QTcpSocket::readyRead, s, [&, s] {
+            connect(s, &TestTcpSocket::readyRead, s, [&, s] {
                 const auto bytes = s->readAll(); if (!bytes.contains("\r\n\r\n")) return;
                 seen.append(bytes);
                 if (bytes.toLower().contains("cookie: redirect")) {
@@ -210,7 +231,7 @@ private slots:
                 s->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nSet-Cookie: injected=secret\r\nConnection: close\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\n\r\n" + body);
                 s->disconnectFromHost();
             });
-            connect(s, &QTcpSocket::disconnected, s, &QObject::deleteLater);
+            connect(s, &TestTcpSocket::disconnected, s, &QObject::deleteLater);
         });
         SessionAuthenticator auth(QUrl(QString("http://127.0.0.1:%1/Account/GraphQL").arg(http.serverPort())));
         QList<Principal> verified;
@@ -233,18 +254,15 @@ private slots:
         QVERIFY(verified[3].accountId.isEmpty());
     }
     void tlsLocalPinAndRelayTrust() {
-        QVERIFY(QSslSocket::supportsSsl());
-        const auto certificates = QSslCertificate::fromPath(TEST_DIRECTORY "/test-cert.pem");
-        QVERIFY(!certificates.isEmpty());
-        QFile key(TEST_DIRECTORY "/test-key.pem"); QVERIFY(key.open(QIODevice::ReadOnly));
-        auto tls = QSslConfiguration::defaultConfiguration();
-        tls.setLocalCertificateChain(certificates); tls.setPrivateKey(QSslKey(key.readAll(), QSsl::Rsa));
-        RelayServer relay(accounts()); QVERIFY(relay.listen(QHostAddress::LocalHost, 0, tls));
+        TlsConfiguration tls;
+        tls.policy.identity.certificate_chain_file = TEST_DIRECTORY "/test-cert.pem";
+        tls.policy.identity.private_key_file = TEST_DIRECTORY "/test-key.pem";
+        RelayServer relay(accounts()); QVERIFY(relay.listen(Address::loopback(), 0, tls));
         auto o = options(relay.port(), "host"); o.relayUrl.setScheme("wss");
         Peer untrusted;
         QVERIFY(untrusted.start(o));
         QTRY_VERIFY(!untrusted.errorString().isEmpty()); QVERIFY(!untrusted.isReady()); untrusted.stop();
-        o.relayTls.addCaCertificates(QSslCertificate::fromPath(TEST_DIRECTORY "/test-ca.pem")); o.localTls = tls;
+        o.relayTls.policy.ca_file = TEST_DIRECTORY "/test-ca.pem"; o.localTls = tls;
         Peer host, client;
         QVERIFY(host.start(o, [](const auto &, const auto &) { return QJsonObject{{"ok", true}, {"tls", true}}; }));
         o.peerId = "client"; o.hostFiles = false;

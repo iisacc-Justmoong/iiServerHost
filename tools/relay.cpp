@@ -1,8 +1,7 @@
-#include <iiServerHost.h>
+#include <iiWebServer.h>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFile>
-#include <QSslKey>
 #include <QTextStream>
 
 int main(int argc, char **argv) {
@@ -13,20 +12,16 @@ int main(int argc, char **argv) {
         {"session-url", "Trusted account session verification endpoint.", "url", "https://iisacc.com/Account/GraphQL"},
         {"certificate", "PEM TLS certificate chain.", "path"}, {"key", "PEM TLS private key.", "path"}});
     parser.process(app);
-    QSslConfiguration tls;
+    iiWebServer::TlsConfiguration tls;
     if (parser.isSet("certificate") || parser.isSet("key")) {
-        const auto certificates = QSslCertificate::fromPath(parser.value("certificate"));
-        QFile file(parser.value("key"));
-        if (certificates.isEmpty() || !file.open(QIODevice::ReadOnly)) parser.showHelp(2);
-        const auto pem = file.readAll(); QSslKey key(pem, QSsl::Rsa); if (key.isNull()) key = QSslKey(pem, QSsl::Ec);
-        if (key.isNull()) parser.showHelp(2);
-        tls = QSslConfiguration::defaultConfiguration(); tls.setLocalCertificateChain(certificates); tls.setPrivateKey(key);
+        tls.policy.identity.certificate_chain_file = parser.value("certificate").toStdString();
+        tls.policy.identity.private_key_file = parser.value("key").toStdString();
     }
     bool valid; const auto port = parser.value("port").toUShort(&valid);
-    const QHostAddress address(parser.value("address")); if (!valid || address.isNull()) parser.showHelp(2);
-    iiServerHost::SessionAuthenticator auth(QUrl(parser.value("session-url")));
-    iiServerHost::RelayServer server([&](const auto &credential, auto done) { auth.authenticate(credential, std::move(done)); });
-    if (!server.listen(address, port, tls)) { QTextStream(stderr) << server.errorString() << Qt::endl; return 1; }
-    QTextStream(stdout) << "iiServerHost relay listening on " << address.toString() << ':' << server.port() << Qt::endl;
+    const auto address = iiWebServer::Address::parse(parser.value("address").toStdString()); if (!valid || !address) parser.showHelp(2);
+    iiWebServer::SessionAuthenticator auth(QUrl(parser.value("session-url")));
+    iiWebServer::RelayServer server([&](const auto &credential, auto done) { auth.authenticate(credential, std::move(done)); });
+    if (!server.listen(*address, port, tls)) { QTextStream(stderr) << server.errorString() << Qt::endl; return 1; }
+    QTextStream(stdout) << "iiWebServer relay listening on " << QString::fromStdString(address->string()) << ':' << server.port() << Qt::endl;
     return app.exec();
 }

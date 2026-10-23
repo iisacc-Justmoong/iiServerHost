@@ -1,4 +1,4 @@
-"""iiServerHost's optional TLS FTP host. Protocol parsing is owned by pyftpdlib.
+"""iiWebServer's optional TLS FTP host. Protocol parsing is owned by pyftpdlib.
 
 Requires pyftpdlib >= 2.2 and pyOpenSSL >= 26. Called by FileProtocolServer,
 with service credentials only in its private child environment.
@@ -28,8 +28,8 @@ def main():
     parser.add_argument("--read-only", action="store_true")
     parser.add_argument("--implicit", action="store_true")
     args = parser.parse_args()
-    user = os.environ.pop("IISERVERHOST_FTP_USER", "")
-    password = os.environ.pop("IISERVERHOST_FTP_PASSWORD", "")
+    user = os.environ.pop("IIWEBSERVER_FTP_USER", "")
+    password = os.environ.pop("IIWEBSERVER_FTP_PASSWORD", "")
     root = Path(args.root)
     if not user or not password or not root.is_absolute() or not root.is_dir() or root.is_symlink():
         raise SystemExit("authentication and an existing absolute root are required")
@@ -46,7 +46,7 @@ def main():
         abstracted_fs = ProviderFilesystem
         tls_control_required = True
         tls_data_required = True
-        banner = "iiServerHost TLS FTP"
+        banner = "iiWebServer TLS FTP"
         timeout = 120
 
         @classmethod

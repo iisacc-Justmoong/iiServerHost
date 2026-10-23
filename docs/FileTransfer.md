@@ -1,6 +1,6 @@
 # 표준 파일 전송과 서버 호스팅
 
-iiServerHost 0.5.0은 기존 계정 기반 WebSocket 전송에 `FileTransfer`, `StorageBridge`, `FileProtocolServer`를 추가한다. 파일의 확장자나 내용에 따른 제한은 없다. 문서, 이미지, 동영상, 모델, 압축 파일과 임의 바이너리를 같은 경로로 전송한다. LAN 주소, DNS 이름과 인터넷 서버 주소를 사용할 수 있으며, 실제 도달 가능성은 서버·방화벽·네트워크 설정에 따른다.
+iiWebServer 0.5.0은 기존 계정 기반 WebSocket 전송에 `FileTransfer`, `StorageBridge`, `FileProtocolServer`를 추가한다. 파일의 확장자나 내용에 따른 제한은 없다. 문서, 이미지, 동영상, 모델, 압축 파일과 임의 바이너리를 같은 경로로 전송한다. LAN 주소, DNS 이름과 인터넷 서버 주소를 사용할 수 있으며, 실제 도달 가능성은 서버·방화벽·네트워크 설정에 따른다.
 
 ## 지원 범위
 
@@ -20,7 +20,7 @@ iiServerHost 0.5.0은 기존 계정 기반 WebSocket 전송에 `FileTransfer`, `
 | TFTP | 다운로드, 업로드 | 포함되지 않는다 |libcurl|
 |Gopher / Gophers| 바이너리 다운로드 | 포함되지 않는다 |libcurl|
 | 로컬 파일 / 마운트된 공유 폴더 | 다운로드, 업로드, 디렉터리 복사 | 위 서버들의 파일 루트로 사용 |Qt / libcurl / rclone|
-| 기존 Society 계정 기반 WS/WSS | 기존 `Peer`, `LanPeer` API | 기존 `RelayServer`, `Peer` API | Qt WebSockets |
+| 기존 Society 계정 기반 WS/WSS | 기존 `Peer`, `LanPeer` API | 기존 `RelayServer`, `Peer` API | iiNetwork WebSocket/TLS |
 
 직접 전송의 지원 여부는 `FileTransfer::protocols()` 또는 `ii-file-transfer --capabilities`가 반환하는 **실제 연결된 libcurl**의 기능으로 결정한다. 이 개발 환경의 libcurl 8.22.0에서는 13개 URL 스킴을 제공한다. SSH가 빠진 다른 libcurl 빌드에서는 SFTP/SCP가 목록에 나타나지 않는다. SMB/SMBS를 포함한 libcurl에서는 해당 스킴도 제공하지만, 현대 NAS 연결에는 rclone의 SMB 백엔드를 사용한다. libcurl의 SMBS를 SMB3의 자체 암호화와 동일한 의미로 취급하지 않는다.
 
@@ -31,18 +31,18 @@ iiServerHost 0.5.0은 기존 계정 기반 WebSocket 전송에 `FileTransfer`, `
 ## 직접 전송 API
 
 ```cpp
-#include <iiServerHost.h>
+#include <iiWebServer.h>
 
-iiServerHost::FileTransfer transfer;
-iiServerHost::TransferRequest request;
+iiWebServer::FileTransfer transfer;
+iiWebServer::TransferRequest request;
 request.url = QUrl("sftp://nas.example/Files/model.safetensors");
 request.localPath = "/absolute/local/model.safetensors";
 request.username = serviceUser;
 request.password = servicePassword;
 request.sshKnownHosts = "/absolute/private/known_hosts";
 request.expectedSha256 = expectedHexDigest;
-QObject::connect(&transfer, &iiServerHost::FileTransfer::finished,
-    [](const QString &id, const iiServerHost::TransferResult &result) {
+QObject::connect(&transfer, &iiWebServer::FileTransfer::finished,
+    [](const QString &id, const iiWebServer::TransferResult &result) {
         // result.ok, error, bytes, sha256, responseCode
     });
 const auto id = transfer.start(request);
@@ -62,13 +62,13 @@ HTTP에는 사용자/비밀번호, Bearer 토큰, 클라이언트 인증서, 별
 ## NAS·클라우드 공통 작업
 
 ```cpp
-iiServerHost::StorageBridgeOptions backend;
+iiWebServer::StorageBridgeOptions backend;
 backend.executable = "/absolute/tools/rclone";
 backend.configFile = "/absolute/private/rclone.conf";
 backend.runtimeDirectory = "/absolute/private/runtime";
-iiServerHost::StorageBridge storage(backend);
-iiServerHost::StorageRequest request;
-request.operation = iiServerHost::StorageOperation::CopyFile;
+iiWebServer::StorageBridge storage(backend);
+iiWebServer::StorageRequest request;
+request.operation = iiWebServer::StorageOperation::CopyFile;
 request.source = "/absolute/local/model.bin";
 request.destination = "NAS:Files/model.bin";
 storage.start(request);
@@ -86,7 +86,7 @@ storage.start(request);
 
 `start()` 성공은 시작 요청 접수이며 `started()`는 자식 프로세스가 실행되었다는 뜻이다. 포트 준비·프로토콜 인증 성공은 클라이언트로 확인해야 한다. 프로세스 오류·종료는 `failed()`와 `stopped()`로 전달한다. `stop()`은 종료 신호 후 2초 안에 종료되지 않으면 강제 종료한다. 객체 소멸도 자식 프로세스를 정리한다. 운영 중 중단은 진행 중인 업로드에 영향을 줄 수 있다.
 
-FTPS/FTPES는 `backend.ftpPythonExecutable`과 `backend.ftpServerScript`를 지정하며 **로컬 파일 루트만** 제공한다. 스크립트는 설치의 `share/iiServerHost/ftp_server.py`에 있다. Python 환경에 `tools/ftp-requirements.txt`의 모듈을 설치한다. rclone 1.75.1의 FTP TLS 서버는 데이터 보호 명령을 제공하지 않아 이 용도로 사용하지 않는다. 별도 pyftpdlib 서버는 TLS 1.2 이상과 제어·데이터 암호화를 모두 강제한다. FTP 계열은 제어 포트 외에 `passivePorts` 범위를 방화벽에 구성해야 하며 NAT에서는 `publicAddress`를 지정할 수 있다.
+FTPS/FTPES는 `backend.ftpPythonExecutable`과 `backend.ftpServerScript`를 지정하며 **로컬 파일 루트만** 제공한다. 스크립트는 설치의 `share/iiWebServer/ftp_server.py`에 있다. Python 환경에 `tools/ftp-requirements.txt`의 모듈을 설치한다. rclone 1.75.1의 FTP TLS 서버는 데이터 보호 명령을 제공하지 않아 이 용도로 사용하지 않는다. 별도 pyftpdlib 서버는 TLS 1.2 이상과 제어·데이터 암호화를 모두 강제한다. FTP 계열은 제어 포트 외에 `passivePorts` 범위를 방화벽에 구성해야 하며 NAT에서는 `publicAddress`를 지정할 수 있다.
 
 NFSv3에는 계정 인증이 없다. loopback 또는 운영자가 별도로 통제하는 네트워크·터널에서 사용한다. 쓰기를 허용하면 VFS 디스크 캐시와 즉시 write-back을 구성한다. S3 서버와 NFS 서버는 [rclone에서 실험 기능으로 분류](https://rclone.org/commands/rclone_serve/)되는 범위를 따른다. restic 서버는 `readOnly=true`를 제공하지 않으므로 쓰기 허용을 명시해야 한다. NFS와 restic은 `FileTransfer` URL 스킴이 아니며 각 표준 클라이언트가 접속한다.
 
@@ -132,9 +132,9 @@ NFSv3에는 계정 인증이 없다. loopback 또는 운영자가 별도로 통�
 
 ## 의존성·빌드·검증
 
-기존 Qt 6.8.3을 재사용한다. libcurl은 C API로 연결하며 SSH/TLS/HTTP 기능은 그 빌드의 의존성에 따른다. rclone과 선택적 Python FTP 서버는 필요할 때 별도 프로세스로 실행한다. 대형 클라우드 SDK들을 C++ SDK에 직접 링크하지 않는다. libcurl은 curl 라이선스, rclone과 pyftpdlib는 MIT, pyOpenSSL은 Apache 2.0이다. 고지는 `ThirdParty/`와 설치 `share/iiServerHost/licenses/`에 제공한다. 사용한 버전과 원문은 [libcurl](https://curl.se/docs/copyright.html), [rclone](https://rclone.org/licence/), [pyftpdlib](https://github.com/giampaolo/pyftpdlib), [pyOpenSSL](https://www.pyopenssl.org/)에서 확인할 수 있다. 테스트 전용 AsyncSSH·Impacket은 SDK 실행 의존성이 아니다.
+기존 Qt 6.8.3을 재사용한다. libcurl은 C API로 연결하며 SSH/TLS/HTTP 기능은 그 빌드의 의존성에 따른다. rclone과 선택적 Python FTP 서버는 필요할 때 별도 프로세스로 실행한다. 대형 클라우드 SDK들을 C++ SDK에 직접 링크하지 않는다. libcurl은 curl 라이선스, rclone과 pyftpdlib는 MIT, pyOpenSSL은 Apache 2.0이다. 고지는 `ThirdParty/`와 설치 `share/iiWebServer/licenses/`에 제공한다. 사용한 버전과 원문은 [libcurl](https://curl.se/docs/copyright.html), [rclone](https://rclone.org/licence/), [pyftpdlib](https://github.com/giampaolo/pyftpdlib), [pyOpenSSL](https://www.pyopenssl.org/)에서 확인할 수 있다. 테스트 전용 AsyncSSH·Impacket은 SDK 실행 의존성이 아니다.
 
-데스크톱은 `IISERVERHOST_WITH_CURL=ON`, `IISERVERHOST_WITH_STORAGE_PROCESS=ON`이 기본이다. libcurl 7.85 이상과 개발 헤더가 필요하며 `CURL_ROOT`로 선택한다. 모바일은 두 옵션이 기본 OFF이다. 모바일용 libcurl을 별도로 준비한 경우 직접 전송을 활성화할 수 있다. 프로세스 백엔드를 비활성화하면 QProcess 헤더를 포함하지 않는 구현으로 빌드하고 `external_backend_disabled`를 반환한다. 기존 WS/WSS 기능은 유지된다.
+데스크톱은 `IIWEBSERVER_WITH_CURL=ON`, `IIWEBSERVER_WITH_STORAGE_PROCESS=ON`이 기본이다. libcurl 7.85 이상과 개발 헤더가 필요하며 `CURL_ROOT`로 선택한다. 모바일은 두 옵션이 기본 OFF이다. 모바일용 libcurl을 별도로 준비한 경우 직접 전송을 활성화할 수 있다. 프로세스 백엔드를 비활성화하면 QProcess 헤더를 포함하지 않는 구현으로 빌드하고 `external_backend_disabled`를 반환한다. 기존 WS/WSS 기능은 유지된다.
 
 ```sh
 python3 tools/setup-protocol-tests.py
@@ -145,14 +145,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DCMAKE_INSTALL_PREFIX="$PWD/build/protocol-stage"
 cmake --build build --parallel 4
 # setup-protocol-tests.py가 출력하는 rclone 경로를 사용한다.
-IISERVERHOST_TEST_RCLONE="$PWD/build/protocol-deps/rclone-v1.75.1-osx-arm64/rclone" \
+IIWEBSERVER_TEST_RCLONE="$PWD/build/protocol-deps/rclone-v1.75.1-osx-arm64/rclone" \
   ctest --test-dir build --output-on-failure
 cmake --install build
 cmake -S tests/consumer -B build/protocol-consumer/build \
   -DCMAKE_PREFIX_PATH="$PWD/build/protocol-stage;/Volumes/Storage/Qt/6.8.3/macos" \
   -DPython3_EXECUTABLE="$PWD/build/protocol-deps/venv/bin/python"
 cmake --build build/protocol-consumer/build --parallel 4
-IISERVERHOST_TEST_RCLONE="$PWD/build/protocol-deps/rclone-v1.75.1-osx-arm64/rclone" \
+IIWEBSERVER_TEST_RCLONE="$PWD/build/protocol-deps/rclone-v1.75.1-osx-arm64/rclone" \
   ctest --test-dir build/protocol-consumer/build --output-on-failure
 ```
 

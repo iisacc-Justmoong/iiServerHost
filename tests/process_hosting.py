@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(dir=build, prefix='process-hosting-') as direct
     root = Path(directory)
     share = root / 'files'
     share.mkdir()
-    payload = b'iiServerHost cross-process file bytes\0\xff'
+    payload = b'iiWebServer cross-process file bytes\0\xff'
     (share / 'sample.bin').write_bytes(payload)
     for account in ('alice', 'bob'):
         path = root / (account + '.cookie')
